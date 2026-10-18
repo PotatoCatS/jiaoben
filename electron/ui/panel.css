@@ -83,7 +83,7 @@ html, body {
 .dshpet-smp-hint { font-size: 11px; opacity: 0.7; }
 .dshpet-smp-main { flex: 1 1 auto; min-height: 0; display: flex; gap: 10px; margin-top: 10px; }
 .dshpet-smp-list {
-  flex: 0 0 258px; min-width: 0; overflow-y: auto;
+  flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto;
   display: flex; flex-direction: column; gap: 6px; padding-right: 2px;
 }
 .dshpet-smp-empty { opacity: 0.55; font-size: 12px; padding: 20px 4px; text-align: center; white-space: pre-line; }
@@ -169,8 +169,10 @@ html, body {
 .dshpet-smp-menu-item:hover { background: rgba(var(--pet-acc-rgb), 0.12); }
 .dshpet-smp-menu-danger { color: #b42318; }
 .dshpet-smp-menu-danger:hover { background: rgba(180, 35, 24, 0.12); }
-/* 重命名弹窗（window.prompt 在 Electron 里不可用，自绘输入框） */
-#dshpet-smprename {
+/* 重命名弹窗（window.prompt 在 Electron 里不可用，自绘输入框）
+   阶段四的通用小输入弹窗（分组重命名等）复用同一套样式 */
+#dshpet-smprename,
+#dshpet-smpprompt {
   position: fixed;
   z-index: 2147483500;
   width: 320px;
@@ -367,3 +369,148 @@ html, body {
   flex-direction: column;
   gap: 8px;
 }
+
+/* ============================================================================
+ * 阶段四（收纳管理）：列表列 / 分组视图 / 批量条 / 收纳弹窗 / 分组弹窗
+ * ============================================================================ */
+
+/* 左列容器：搜索+排序控件、列表、批量条竖着排 */
+.dshpet-smp-listcol {
+  flex: 0 0 268px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dshpet-smp-listctrls { flex: 0 0 auto; display: flex; gap: 6px; margin-bottom: 8px; }
+.dshpet-smp-search {
+  flex: 1 1 auto; min-width: 0;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 7px;
+  padding: 4px 8px; font-size: 12px; font-family: inherit;
+  background: var(--pet-cream); color: inherit;
+}
+.dshpet-smp-search:focus { outline: 2px solid rgba(var(--pet-acc-rgb), 0.35); outline-offset: -1px; }
+.dshpet-smp-sortsel {
+  flex: 0 0 auto; max-width: 96px;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 7px;
+  padding: 4px 4px; font-size: 12px; font-family: inherit;
+  background: var(--pet-cream); color: inherit;
+}
+
+/* 组头：勾选框 + 折叠箭头 + 组名 + 数量 + ⋯ */
+.dshpet-smp-group-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--pet-acc);
+  padding: 5px 6px 3px; margin-top: 4px; border-radius: 7px;
+  cursor: pointer; user-select: none;
+}
+.dshpet-smp-group-head:hover { background: rgba(var(--pet-acc-rgb), 0.08); }
+.dshpet-smp-group-arrow { flex: 0 0 auto; font-size: 10px; opacity: 0.8; }
+.dshpet-smp-group-count { font-size: 11px; font-weight: 400; opacity: 0.55; }
+.dshpet-smp-group-btn {
+  margin-left: auto; border: none; background: transparent; color: inherit;
+  font-size: 13px; line-height: 1; cursor: pointer; padding: 1px 5px;
+  border-radius: 5px; opacity: 0.7;
+}
+.dshpet-smp-group-btn:hover { background: rgba(var(--pet-acc-rgb), 0.14); opacity: 1; }
+
+/* 勾选框：平时轻显示，悬停行/组头时明显 */
+.dshpet-smp-item-check { flex: 0 0 auto; accent-color: var(--pet-acc); opacity: 0.45; cursor: pointer; }
+.dshpet-smp-item:hover .dshpet-smp-item-check,
+.dshpet-smp-group-head:hover .dshpet-smp-item-check { opacity: 1; }
+
+/* 停用样式：整行变灰 + 「已停用」小标 */
+.dshpet-smp-item-off { opacity: 0.62; }
+.dshpet-smp-item-off:hover { opacity: 0.85; }
+.dshpet-smp-off-tag {
+  flex: 0 0 auto; font-size: 10px; font-weight: 600; border-radius: 4px;
+  padding: 0 5px; color: #8a6d1a; background: rgba(227, 193, 113, 0.28);
+  border: 1px solid rgba(227, 193, 113, 0.55);
+}
+
+/* 批量操作条：勾 2 个以上浮在列表底部 */
+.dshpet-smp-bulk {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  margin-top: 8px; padding: 7px 8px; border-radius: 9px;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); background: rgba(var(--pet-acc-rgb), 0.06);
+}
+.dshpet-smp-bulk-label { font-size: 12px; font-weight: 600; }
+
+/* 收纳管理弹窗：开关行 + 左待收纳清单 + 右不收编名单 */
+#dshpet-smpadopt {
+  position: fixed;
+  z-index: 2147483500;
+  width: 660px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 24px);
+  box-sizing: border-box;
+  padding: 12px;
+  background: rgba(255, 253, 244, 0.99);
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.38);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(13, 14, 15, 0.32);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--pet-txt);
+  color-scheme: light;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dshpet-smp-adopt-head {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; font-weight: 700;
+}
+.dshpet-smp-adopt-switches { flex: 0 0 auto; display: flex; gap: 18px; flex-wrap: wrap; }
+.dshpet-smp-adopt-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; }
+.dshpet-smp-adopt-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 10px; }
+.dshpet-smp-adopt-left { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.dshpet-smp-adopt-right { flex: 0 0 200px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.dshpet-smp-adopt-label { flex: 0 0 auto; font-size: 12px; font-weight: 600; opacity: 0.8; }
+.dshpet-smp-adopt-list {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.3); border-radius: 8px; padding: 6px;
+  background: rgba(var(--pet-acc-rgb), 0.03);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.dshpet-smp-adopt-row { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.dshpet-smp-adopt-row .dshpet-smp-btn { margin-left: auto; }
+.dshpet-smp-adopt-file { display: inline-flex; align-items: center; gap: 5px; min-width: 0; word-break: break-all; }
+.dshpet-smp-adopt-rel { opacity: 0.55; font-size: 11px; }
+.dshpet-smp-adopt-btns { flex: 0 0 auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.dshpet-smp-adopt-empty { opacity: 0.55; font-size: 12px; padding: 14px 6px; text-align: center; white-space: pre-line; }
+
+/* 分组管理弹窗：分组行 + 新建行 */
+#dshpet-smpgroups {
+  position: fixed;
+  z-index: 2147483500;
+  width: 440px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 12px;
+  background: rgba(255, 253, 244, 0.99);
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.38);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(13, 14, 15, 0.32);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--pet-txt);
+  color-scheme: light;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dshpet-smp-groups-list {
+  flex: 1 1 auto; min-height: 0; max-height: 300px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.dshpet-smp-groups-row {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.22); border-radius: 8px; padding: 6px 9px;
+  background: rgba(var(--pet-acc-rgb), 0.04);
+}
+.dshpet-smp-groups-name { font-size: 12.5px; font-weight: 600; word-break: break-all; }
+.dshpet-smp-groups-new { flex: 0 0 auto; display: flex; gap: 7px; align-items: center; }
+.dshpet-smp-groups-input { flex: 1 1 auto; min-width: 0; }
+
+/* 右键「移动到分组」子菜单里没有分组时的提示 */
+.dshpet-smp-menu-hint { font-size: 11px; opacity: 0.6; padding: 4px 12px; white-space: pre-line; max-width: 190px; }

@@ -39,6 +39,22 @@ var scPythonPath = null
 var scSchedEl = null
 var scPyDlgEl = null
 var scCronTimer = null
+// 阶段四（收纳）：分组 / 收纳选项 / 不收编名单 / 搜索 / 排序 / 勾选 / 折叠
+var scGroups = []
+var scOpts = { deepAdopt: false, autoAdopt: false }
+var scExcluded = []
+var scSearch = ''
+var scSortKey = 'order'
+var scChecked = {}
+var scCollapsed = {}
+var scSearchEl = null
+var scSortEl = null
+var scBulkEl = null
+var scAdoptEl = null
+var scAdoptCands = []
+var scAdoptChecked = {}
+var scGroupMgrEl = null
+var scPromptEl = null
 
 var bridge = window.jiaoben || null
 
@@ -79,6 +95,10 @@ function closeScriptPanel() {
   closeScExamples()
   closeScSched()
   closeScPyDlg()
+  closeScAdopt()
+  closeScGroupMgr()
+  closeScPrompt()
+  scChecked = {}
   scPanelEl.style.display = 'none'
   scSelId = null
   scSetDirty(false)
@@ -118,6 +138,13 @@ async function scRefresh() {
   scItems = (res && res.items) || []
   scPython = (res && res.python) || null
   scPythonPath = (res && res.pythonPath) || null
+  scGroups = (res && res.groups) || []
+  scOpts = (res && res.opts) || { deepAdopt: false, autoAdopt: false }
+  scExcluded = (res && res.excluded) || []
+  // 勾选状态里清掉已经不在列表里的脚本（被删/被换目录）
+  Object.keys(scChecked).forEach(function (k) {
+    if (!scItemById(k)) delete scChecked[k]
+  })
   if (scSelId && !scItemById(scSelId)) {
     scSelId = null
     scSetDirty(false)
@@ -196,6 +223,13 @@ function openScCtxMenu(it, x, y) {
   var m = document.createElement('div')
   m.id = 'dshpet-smpmenu'
   m.className = 'dshpet-smp-menu'
+  m.appendChild(scCtxItem('移动到分组', function () { openScCtxGroupMenu(it, x, y) }))
+  m.appendChild(
+    scCtxItem(
+      it.enabled === false ? '启用（恢复自动运行）' : '停用（暂停自动运行）',
+      function () { scToggleEnabled(it) },
+    ),
+  )
   m.appendChild(scCtxItem('克隆（生成副本）', function () { scClone(it.id) }))
   m.appendChild(scCtxItem('重命名', function () { scRename(it) }))
   m.appendChild(scCtxItem('存为示例', function () { scSaveAsExample(it) }))
@@ -209,6 +243,64 @@ function openScCtxMenu(it, x, y) {
   var h = m.offsetHeight
   m.style.left = Math.min(x, Math.max(8, vw - w - 8)) + 'px'
   m.style.top = Math.min(y, Math.max(8, vh - h - 8)) + 'px'
+}
+
+// 「移动到分组」子菜单：列出全部分组 + 未分组
+function openScCtxGroupMenu(it, x, y) {
+  closeScCtxMenu()
+  var m = document.createElement('div')
+  m.id = 'dshpet-smpmenu'
+  m.className = 'dshpet-smp-menu'
+  var groups = scGroups || []
+  for (var i = 0; i < groups.length; i++) {
+    ;(function (g) {
+      m.appendChild(
+        scCtxItem((it.group === g.id ? '✓ ' : '') + g.name, function () {
+          scMoveToGroup([it.id], g.id)
+        }),
+      )
+    })(groups[i])
+  }
+  m.appendChild(
+    scCtxItem((!it.group ? '✓ ' : '') + '未分组', function () {
+      scMoveToGroup([it.id], null)
+    }),
+  )
+  if (!groups.length) {
+    var hint = document.createElement('div')
+    hint.className = 'dshpet-smp-menu-hint'
+    hint.textContent = '还没有分组，点「收纳管理」\n或组头 ⋯ 新建一个'
+    m.appendChild(hint)
+  }
+  scRoot.appendChild(m)
+  scCtxEl = m
+  var vw = window.innerWidth
+  var vh = window.innerHeight
+  var w = m.offsetWidth
+  var h = m.offsetHeight
+  m.style.left = Math.min(x, Math.max(8, vw - w - 8)) + 'px'
+  m.style.top = Math.min(y, Math.max(8, vh - h - 8)) + 'px'
+}
+
+async function scMoveToGroup(ids, groupId) {
+  if (!bridge || !bridge.groupMove) return
+  for (var i = 0; i < ids.length; i++) {
+    await bridge.groupMove(ids[i], groupId)
+  }
+  await scRefresh()
+  var g = (scGroups || []).find(function (x) { return x.id === groupId })
+  scSetStatus(groupId ? '已移到分组「' + (g ? g.name : groupId) + '」' : '已移到未分组')
+}
+
+async function scToggleEnabled(it) {
+  var r = null
+  if (bridge && bridge.setEnabled) r = await bridge.setEnabled(it.id, it.enabled === false)
+  await scRefresh()
+  if (!r || !r.ok) {
+    scSetStatus((r && r.error) || '操作失败')
+    return
+  }
+  scSetStatus(r.item.enabled === false ? '已停用「' + r.item.name + '」（自动运行暂停，手动仍可运行）' : '已启用「' + r.item.name + '」')
 }
 
 window.addEventListener(
@@ -1368,14 +1460,38 @@ function scItemEl(it) {
     'dshpet-smp-item' +
     (it.id === scSelId ? ' dshpet-smp-item-sel' : '') +
     (it.exists === false ? ' dshpet-smp-item-missing' : '') +
-    (it.alarm ? ' dshpet-smp-item-alarm' : '')
+    (it.alarm ? ' dshpet-smp-item-alarm' : '') +
+    (it.enabled === false ? ' dshpet-smp-item-off' : '')
   var name = document.createElement('div')
   name.className = 'dshpet-smp-item-name'
+  // 批量勾选框：平时轻显示，悬停时明显；点它不触发选中
+  var cb = document.createElement('input')
+  cb.type = 'checkbox'
+  cb.className = 'dshpet-smp-item-check'
+  cb.checked = !!scChecked[it.id]
+  cb.title = '勾选以批量操作'
+  cb.addEventListener('click', function (e) {
+    e.stopPropagation()
+  })
+  cb.addEventListener('change', function () {
+    if (cb.checked) scChecked[it.id] = true
+    else delete scChecked[it.id]
+    renderScBulk()
+  })
+  name.appendChild(cb)
   var lang = document.createElement('span')
   lang.className = 'dshpet-smp-lang' + (it.lang === 'py' ? ' dshpet-smp-lang-py' : '')
   lang.textContent = it.lang === 'py' ? 'PY' : 'JS'
   name.appendChild(lang)
   name.appendChild(document.createTextNode(it.name))
+  // 停用小标
+  if (it.enabled === false) {
+    var offTag = document.createElement('span')
+    offTag.className = 'dshpet-smp-off-tag'
+    offTag.textContent = '已停用'
+    offTag.title = '自动运行（定时/随启动/长驻）已暂停，手动「运行」仍可用'
+    name.appendChild(offTag)
+  }
   // 阶段三标记：⏱ 定时 / 🚀 随启动 / 🔁 长驻（悬停看细节）
   var mk = function (ch, tip) {
     var s = document.createElement('span')
@@ -1390,14 +1506,20 @@ function scItemEl(it) {
   box.appendChild(name)
   var sub = document.createElement('div')
   sub.className = 'dshpet-smp-item-sub'
-  if (it.alarm) sub.textContent = '⚠ ' + it.alarm
-  else if (it.cronError) sub.textContent = '⚠ ' + it.cronError
-  else sub.textContent = (it.exists === false ? '找不到文件 · ' : '') + (it.running > 0 ? '运行中 ×' + it.running : '未运行')
+  // 子目录脚本把相对路径亮出来（file 字段是「子目录/文件名」）
+  var slash = String(it.file || '').lastIndexOf('/')
+  var relDir = slash > 0 ? it.file.slice(0, slash) : ''
+  var subText = ''
+  if (relDir) subText += relDir + '/'
+  if (it.alarm) subText += (subText ? ' · ' : '') + '⚠ ' + it.alarm
+  else if (it.cronError) subText += (subText ? ' · ' : '') + '⚠ ' + it.cronError
+  else subText += (subText ? ' · ' : '') + (it.exists === false ? '找不到文件 · ' : '') + (it.running > 0 ? '运行中 ×' + it.running : '未运行')
+  sub.textContent = subText
   box.appendChild(sub)
   box.addEventListener('click', function () {
     scSelect(it.id)
   })
-  // 右键弹出操作菜单：克隆 / 重命名 / 删除（运行/停止留在行尾按钮）
+  // 右键弹出操作菜单：移动到分组 / 停用启用 / 克隆 / 重命名 / 存为示例 / 删除
   box.addEventListener('contextmenu', function (e) {
     e.preventDefault()
     e.stopPropagation()
@@ -1448,6 +1570,88 @@ function scItemEl(it) {
   return box
 }
 
+// 搜索 + 排序后的可见列表（排序只影响组内顺序，不跨组）
+function scVisibleItems() {
+  var q = String(scSearch || '').trim().toLowerCase()
+  var arr = scItems.slice()
+  if (q) {
+    arr = arr.filter(function (x) {
+      return String(x.name || '').toLowerCase().indexOf(q) >= 0
+    })
+  }
+  if (scSortKey === 'name') {
+    arr.sort(function (a, b) {
+      return String(a.name).localeCompare(String(b.name), 'zh-Hans-CN')
+    })
+  } else if (scSortKey === 'created') {
+    arr.sort(function (a, b) {
+      return (a.createdAt || 0) - (b.createdAt || 0)
+    })
+  } else if (scSortKey === 'recent') {
+    arr.sort(function (a, b) {
+      return (b.lastRunAt || 0) - (a.lastRunAt || 0)
+    })
+  }
+  return arr
+}
+
+function scGroupHeaderEl(sec) {
+  var isNone = sec.kind === 'none'
+  var key = isNone ? '__none__' : sec.grp.id
+  var collapsed = !!scCollapsed[key]
+  var hd = document.createElement('div')
+  hd.className = 'dshpet-smp-group-head'
+  // 组头勾选 = 全选/全不选该组
+  var cb = document.createElement('input')
+  cb.type = 'checkbox'
+  cb.className = 'dshpet-smp-item-check'
+  var allChecked = sec.items.length > 0 && sec.items.every(function (x) { return !!scChecked[x.id] })
+  cb.checked = allChecked
+  cb.title = allChecked ? '取消全选本组' : '全选本组'
+  cb.addEventListener('click', function (e) {
+    e.stopPropagation()
+  })
+  cb.addEventListener('change', function () {
+    sec.items.forEach(function (x) {
+      if (cb.checked) scChecked[x.id] = true
+      else delete scChecked[x.id]
+    })
+    renderScList()
+    renderScBulk()
+  })
+  hd.appendChild(cb)
+  var arrow = document.createElement('span')
+  arrow.className = 'dshpet-smp-group-arrow'
+  arrow.textContent = collapsed ? '▸' : '▾'
+  hd.appendChild(arrow)
+  hd.appendChild(document.createTextNode(isNone ? '未分组' : sec.grp.name))
+  var count = document.createElement('span')
+  count.className = 'dshpet-smp-group-count'
+  count.textContent = sec.items.length
+  hd.appendChild(count)
+  // ⋯ 按钮：所有组头都有（含「未分组」——没有分组时这是建第一个分组的入口）
+  var mgr = document.createElement('button')
+  mgr.type = 'button'
+  mgr.className = 'dshpet-smp-group-btn'
+  mgr.textContent = '⋯'
+  mgr.title = '分组管理：新建 / 重命名 / 删除分组'
+  mgr.addEventListener('click', function (e) {
+    e.stopPropagation()
+    openScGroupMgr(isNone ? null : sec.grp.id)
+  })
+  hd.appendChild(mgr)
+  hd.addEventListener('click', function () {
+    scCollapsed[key] = !scCollapsed[key]
+    renderScList()
+  })
+  hd.addEventListener('contextmenu', function (e) {
+    e.preventDefault()
+    e.stopPropagation()
+    openScGroupMgr(isNone ? null : sec.grp.id)
+  })
+  return hd
+}
+
 function renderScList() {
   if (!scListEl) return
   scListEl.textContent = ''
@@ -1456,6 +1660,7 @@ function renderScList() {
     e1.className = 'dshpet-smp-empty'
     e1.textContent = '还没有选择脚本目录。\n点上面「选择/更换目录」挑一个文件夹放脚本。'
     scListEl.appendChild(e1)
+    renderScBulk()
     return
   }
   if (!scItems.length) {
@@ -1463,11 +1668,669 @@ function renderScList() {
     e2.className = 'dshpet-smp-empty'
     e2.textContent = '还没有脚本。\n上面填个名字点「新建」。'
     scListEl.appendChild(e2)
+    renderScBulk()
     return
   }
-  for (var i = 0; i < scItems.length; i++) {
-    scListEl.appendChild(scItemEl(scItems[i]))
+  var vis = scVisibleItems()
+  if (!vis.length) {
+    var e3 = document.createElement('div')
+    e3.className = 'dshpet-smp-empty'
+    e3.textContent = '没有匹配「' + scSearch + '」的脚本。'
+    scListEl.appendChild(e3)
+    renderScBulk()
+    return
   }
+  // 分组视图：有分组就按组排（组按创建顺序），组尾跟「未分组」；没分组就只有一个「未分组」
+  var sections = []
+  if (scGroups.length) {
+    for (var g = 0; g < scGroups.length; g++) {
+      sections.push({ kind: 'group', grp: scGroups[g], items: vis.filter(function (x) { return x.group === scGroups[g].id }) })
+    }
+    sections.push({ kind: 'none', items: vis.filter(function (x) { return !x.group }) })
+  } else {
+    sections.push({ kind: 'none', items: vis })
+  }
+  var searching = String(scSearch || '').trim().length > 0
+  for (var s = 0; s < sections.length; s++) {
+    var sec = sections[s]
+    // 搜索时藏空组；平时空组也显示——刚新建的分组要有地方看得见、管得着（⋯）
+    if (!sec.items.length && searching) continue
+    var key = sec.kind === 'none' ? '__none__' : sec.grp.id
+    scListEl.appendChild(scGroupHeaderEl(sec))
+    if (!scCollapsed[key]) {
+      for (var i = 0; i < sec.items.length; i++) {
+        scListEl.appendChild(scItemEl(sec.items[i]))
+      }
+    }
+  }
+  renderScBulk()
+}
+
+// 批量操作条：勾了 2 个以上脚本时浮在列表底部（移动到分组 / 停用启用 / 删除）
+function scCheckedIds() {
+  return Object.keys(scChecked).filter(function (k) {
+    return scChecked[k] && scItemById(k)
+  })
+}
+
+function renderScBulk() {
+  if (!scBulkEl) return
+  scBulkEl.textContent = ''
+  var ids = scCheckedIds()
+  if (ids.length < 2) {
+    scBulkEl.style.display = 'none'
+    return
+  }
+  scBulkEl.style.display = ''
+  var label = document.createElement('span')
+  label.className = 'dshpet-smp-bulk-label'
+  label.textContent = '已勾选 ' + ids.length + ' 个'
+  scBulkEl.appendChild(label)
+  // 移动到分组：选完即执行
+  var sel = document.createElement('select')
+  sel.className = 'dshpet-smp-select'
+  var ph = document.createElement('option')
+  ph.value = ''
+  ph.textContent = '移动到分组…'
+  ph.disabled = true
+  ph.selected = true
+  sel.appendChild(ph)
+  scGroups.forEach(function (g) {
+    var o = document.createElement('option')
+    o.value = g.id
+    o.textContent = g.name
+    sel.appendChild(o)
+  })
+  var none = document.createElement('option')
+  none.value = '__none__'
+  none.textContent = '未分组'
+  sel.appendChild(none)
+  sel.addEventListener('change', function () {
+    var v = sel.value
+    if (!v) return
+    sel.disabled = true
+    scMoveToGroup(ids.slice(), v === '__none__' ? null : v).then(function () {
+      ids.forEach(function (id) { delete scChecked[id] })
+      renderScList()
+    })
+  })
+  scBulkEl.appendChild(sel)
+  // 停用 / 启用：有任一未停用就整体停用，全停用就整体启用
+  var anyOn = ids.some(function (id) {
+    var it = scItemById(id)
+    return it && it.enabled !== false
+  })
+  var tg = document.createElement('button')
+  tg.type = 'button'
+  tg.className = 'dshpet-smp-btn'
+  tg.textContent = anyOn ? '停用（暂停自动）' : '启用'
+  tg.title = '停用只暂停定时/随启动/长驻，配置保留；手动运行不受影响'
+  tg.addEventListener('click', async function () {
+    if (!bridge || !bridge.setEnabled) return
+    for (var i = 0; i < ids.length; i++) {
+      await bridge.setEnabled(ids[i], !anyOn)
+    }
+    ids.forEach(function (id) { delete scChecked[id] })
+    await scRefresh()
+    scSetStatus(anyOn ? '已停用 ' + ids.length + ' 个脚本（自动运行暂停）' : '已启用 ' + ids.length + ' 个脚本')
+  })
+  scBulkEl.appendChild(tg)
+  // 批量删除：确认一次；确定 = 连文件删，取消 = 只移出列表
+  var del = document.createElement('button')
+  del.type = 'button'
+  del.className = 'dshpet-smp-btn'
+  del.textContent = '删除'
+  del.addEventListener('click', async function () {
+    var delFile = false
+    try {
+      delFile = window.confirm('删除勾选的 ' + ids.length + ' 个脚本？\n\n确定 = 连同脚本文件一起删\n取消 = 只从列表移除（文件留在目录里）')
+    } catch (err) {}
+    if (!bridge || !bridge.remove) return
+    for (var i = 0; i < ids.length; i++) {
+      await bridge.remove(ids[i], delFile)
+    }
+    ids.forEach(function (id) { delete scChecked[id] })
+    await scRefresh()
+    scSetStatus('已删除 ' + ids.length + ' 个脚本' + (delFile ? '（含文件）' : '（文件保留）'))
+  })
+  scBulkEl.appendChild(del)
+}
+
+// ============================================================================
+// 阶段四：收纳管理弹窗（待收纳清单 / 不收编名单 / 两个开关）
+// ============================================================================
+function closeScAdopt() {
+  if (!scAdoptEl) return
+  try {
+    scAdoptEl.remove()
+  } catch (err) {}
+  scAdoptEl = null
+}
+
+function scAdoptRowEl(label, opts) {
+  opts = opts || {}
+  var row = document.createElement('div')
+  row.className = 'dshpet-smp-adopt-row'
+  var cb = document.createElement('input')
+  cb.type = 'checkbox'
+  cb.className = 'dshpet-smp-item-check'
+  cb.checked = !!opts.checked
+  cb.addEventListener('change', function () {
+    opts.onCheck(cb.checked)
+  })
+  row.appendChild(cb)
+  var name = document.createElement('span')
+  name.className = 'dshpet-smp-adopt-file'
+  name.textContent = label
+  if (opts.lang) {
+    var lang = document.createElement('span')
+    lang.className = 'dshpet-smp-lang' + (opts.lang === 'py' ? ' dshpet-smp-lang-py' : '')
+    lang.textContent = opts.lang === 'py' ? 'PY' : 'JS'
+    name.appendChild(lang)
+  }
+  if (opts.relDir) {
+    var rel = document.createElement('span')
+    rel.className = 'dshpet-smp-adopt-rel'
+    rel.textContent = opts.relDir + '/'
+    name.appendChild(rel)
+  }
+  row.appendChild(name)
+  if (opts.btn) {
+    var b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'dshpet-smp-btn'
+    b.textContent = opts.btn
+    b.addEventListener('click', opts.onBtn)
+    row.appendChild(b)
+  }
+  return row
+}
+
+function scAdoptRender() {
+  if (!scAdoptEl) return
+  var candsEl = scAdoptEl.querySelector('.dshpet-smp-adopt-cands')
+  var exEl = scAdoptEl.querySelector('.dshpet-smp-adopt-excluded')
+  // 开关状态回填
+  var swAuto = scAdoptEl.querySelector('.dshpet-smp-adopt-sw-auto')
+  var swDeep = scAdoptEl.querySelector('.dshpet-smp-adopt-sw-deep')
+  if (swAuto) swAuto.checked = !!scOpts.autoAdopt
+  if (swDeep) swDeep.checked = !!scOpts.deepAdopt
+  // 待收纳清单：默认全勾
+  candsEl.textContent = ''
+  if (!scAdoptCands.length) {
+    var e = document.createElement('div')
+    e.className = 'dshpet-smp-adopt-empty'
+    e.textContent = '没有待收纳的脚本。\n目录里所有 .js/.py 都已收编或进了名单。'
+    candsEl.appendChild(e)
+  }
+  for (var i = 0; i < scAdoptCands.length; i++) {
+    ;(function (c) {
+      if (!(c.rel in scAdoptChecked)) scAdoptChecked[c.rel] = true // 新面孔默认勾上
+      var slash = c.rel.lastIndexOf('/')
+      candsEl.appendChild(
+        scAdoptRowEl(c.file, {
+          lang: c.lang,
+          relDir: slash > 0 ? c.rel.slice(0, slash) : '',
+          checked: !!scAdoptChecked[c.rel],
+          onCheck: function (on) {
+            if (on) scAdoptChecked[c.rel] = true
+            else delete scAdoptChecked[c.rel]
+          },
+        }),
+      )
+    })(scAdoptCands[i])
+  }
+  // 不收编名单
+  exEl.textContent = ''
+  if (!scExcluded.length) {
+    var e2 = document.createElement('div')
+    e2.className = 'dshpet-smp-adopt-empty'
+    e2.textContent = '名单是空的。\n从列表删除但保留文件，或点「忽略选中的」，文件就会记到这里。'
+    exEl.appendChild(e2)
+  }
+  for (var j = 0; j < scExcluded.length; j++) {
+    ;(function (f) {
+      exEl.appendChild(
+        scAdoptRowEl(f, {
+          btn: '恢复收纳',
+          onBtn: async function () {
+            if (bridge && bridge.unexclude) await bridge.unexclude(f)
+            await scAdoptRefresh()
+            scSetStatus('已恢复收纳：' + f + '（重新扫描或等自动收纳就能进来）')
+          },
+        }),
+      )
+    })(scExcluded[j])
+  }
+}
+
+async function scAdoptRefresh() {
+  if (!bridge) return
+  var o = await bridge.optsGet()
+  if (o && o.ok) scOpts = o.opts || { deepAdopt: false, autoAdopt: false }
+  var r = await bridge.scanCandidates()
+  scAdoptCands = r && r.ok ? r.candidates || [] : []
+  var ex = await bridge.excludedList()
+  scExcluded = ex && ex.ok ? ex.files || [] : []
+  scAdoptRender()
+}
+
+function scAdoptCheckedRels() {
+  return Object.keys(scAdoptChecked).filter(function (k) {
+    return scAdoptChecked[k] && scAdoptCands.some(function (c) { return c.rel === k })
+  })
+}
+
+async function openScAdopt() {
+  closeScAdopt()
+  closeScCtxMenu()
+  scAdoptChecked = {}
+  var box = document.createElement('div')
+  box.id = 'dshpet-smpadopt'
+  box.className = 'dshpet-smp-adopt'
+  var head = document.createElement('div')
+  head.className = 'dshpet-smp-adopt-head'
+  head.textContent = '收纳管理'
+  head.style.userSelect = 'none'
+  var x = document.createElement('button')
+  x.type = 'button'
+  x.className = 'dshpet-smp-close'
+  x.textContent = '✕'
+  x.addEventListener('click', function (e) {
+    e.stopPropagation()
+    closeScAdopt()
+  })
+  head.appendChild(x)
+  box.appendChild(head)
+
+  // 两个开关：自动收纳 + 子目录收纳
+  var sw = document.createElement('div')
+  sw.className = 'dshpet-smp-adopt-switches'
+  var lab1 = document.createElement('label')
+  lab1.className = 'dshpet-smp-adopt-check'
+  var swAuto = document.createElement('input')
+  swAuto.type = 'checkbox'
+  swAuto.className = 'dshpet-smp-adopt-sw-auto'
+  swAuto.addEventListener('change', async function () {
+    if (bridge && bridge.optsSet) {
+      var r = await bridge.optsSet({ autoAdopt: swAuto.checked })
+      if (r && r.ok) scOpts = r.opts
+    }
+    scSetStatus(swAuto.checked ? '自动收纳已打开：放文件进目录，约 30 秒内自动进列表' : '自动收纳已关闭')
+  })
+  lab1.appendChild(swAuto)
+  lab1.appendChild(document.createTextNode('自动收纳（新文件约 30 秒内自动进列表）'))
+  sw.appendChild(lab1)
+  var lab2 = document.createElement('label')
+  lab2.className = 'dshpet-smp-adopt-check'
+  var swDeep = document.createElement('input')
+  swDeep.type = 'checkbox'
+  swDeep.className = 'dshpet-smp-adopt-sw-deep'
+  swDeep.addEventListener('change', async function () {
+    if (bridge && bridge.optsSet) {
+      var r = await bridge.optsSet({ deepAdopt: swDeep.checked })
+      if (r && r.ok) scOpts = r.opts
+    }
+    // 开关变了，候选范围跟着变，重扫一遍
+    scAdoptChecked = {}
+    await scAdoptRefresh()
+    scSetStatus(swDeep.checked ? '已打开子目录收纳：子文件夹里的 .js/.py 也会被收编' : '已关闭子目录收纳：只收目录一级的 .js/.py')
+  })
+  lab2.appendChild(swDeep)
+  lab2.appendChild(document.createTextNode('收纳子目录里的脚本'))
+  sw.appendChild(lab2)
+  box.appendChild(sw)
+
+  // 左：待收纳清单；右：不收编名单
+  var body = document.createElement('div')
+  body.className = 'dshpet-smp-adopt-body'
+  var left = document.createElement('div')
+  left.className = 'dshpet-smp-adopt-left'
+  var labL = document.createElement('div')
+  labL.className = 'dshpet-smp-adopt-label'
+  labL.textContent = '待收纳清单（目录里有、列表里没有的脚本）'
+  left.appendChild(labL)
+  var cands = document.createElement('div')
+  cands.className = 'dshpet-smp-adopt-list dshpet-smp-adopt-cands'
+  left.appendChild(cands)
+  var btns = document.createElement('div')
+  btns.className = 'dshpet-smp-adopt-btns'
+  var adoptBtn = document.createElement('button')
+  adoptBtn.type = 'button'
+  adoptBtn.className = 'dshpet-smp-btn dshpet-smp-btn-primary'
+  adoptBtn.textContent = '收编选中的'
+  adoptBtn.addEventListener('click', async function () {
+    var rels = scAdoptCheckedRels()
+    if (!rels.length) {
+      scSetStatus('先勾选要收编的文件')
+      return
+    }
+    var r = null
+    if (bridge && bridge.adopt) r = await bridge.adopt(rels)
+    await scAdoptRefresh()
+    await scRefresh()
+    if (r && r.ok) {
+      var n = r.added ? r.added.length : 0
+      var bad = r.failed ? r.failed.length : 0
+      scSetStatus('已收编 ' + n + ' 个脚本' + (bad ? '，' + bad + ' 个失败' : ''))
+    } else {
+      scSetStatus((r && r.error) || '收编失败')
+    }
+  })
+  btns.appendChild(adoptBtn)
+  var ignBtn = document.createElement('button')
+  ignBtn.type = 'button'
+  ignBtn.className = 'dshpet-smp-btn'
+  ignBtn.textContent = '忽略选中的'
+  ignBtn.title = '加进「不收编名单」：以后扫描/自动收纳都跳过这些文件'
+  ignBtn.addEventListener('click', async function () {
+    var rels = scAdoptCheckedRels()
+    if (!rels.length) {
+      scSetStatus('先勾选要忽略的文件')
+      return
+    }
+    if (bridge && bridge.ignore) await bridge.ignore(rels)
+    await scAdoptRefresh()
+    scSetStatus('已把 ' + rels.length + ' 个文件加进「不收编名单」')
+  })
+  btns.appendChild(ignBtn)
+  var allBtn = document.createElement('button')
+  allBtn.type = 'button'
+  allBtn.className = 'dshpet-smp-btn'
+  allBtn.textContent = '全选'
+  allBtn.addEventListener('click', function () {
+    scAdoptCands.forEach(function (c) { scAdoptChecked[c.rel] = true })
+    scAdoptRender()
+  })
+  btns.appendChild(allBtn)
+  var noneBtn = document.createElement('button')
+  noneBtn.type = 'button'
+  noneBtn.className = 'dshpet-smp-btn'
+  noneBtn.textContent = '全不选'
+  noneBtn.addEventListener('click', function () {
+    scAdoptCands.forEach(function (c) { delete scAdoptChecked[c.rel] })
+    scAdoptRender()
+  })
+  btns.appendChild(noneBtn)
+  var rescanBtn = document.createElement('button')
+  rescanBtn.type = 'button'
+  rescanBtn.className = 'dshpet-smp-btn'
+  rescanBtn.textContent = '重新扫描'
+  rescanBtn.addEventListener('click', function () {
+    scAdoptChecked = {}
+    scAdoptRefresh()
+  })
+  btns.appendChild(rescanBtn)
+  left.appendChild(btns)
+  body.appendChild(left)
+  var right = document.createElement('div')
+  right.className = 'dshpet-smp-adopt-right'
+  var labR = document.createElement('div')
+  labR.className = 'dshpet-smp-adopt-label'
+  labR.textContent = '不收编名单'
+  right.appendChild(labR)
+  var exl = document.createElement('div')
+  exl.className = 'dshpet-smp-adopt-list dshpet-smp-adopt-excluded'
+  right.appendChild(exl)
+  body.appendChild(right)
+  box.appendChild(body)
+
+  scRoot.appendChild(box)
+  scAdoptEl = box
+  var vw = window.innerWidth
+  var vh = window.innerHeight
+  var w = box.offsetWidth
+  var h = box.offsetHeight
+  box.style.left = Math.max(8, Math.round((vw - w) / 2)) + 'px'
+  box.style.top = Math.max(8, Math.round((vh - h) / 2.5)) + 'px'
+  await scAdoptRefresh()
+}
+
+window.addEventListener(
+  'pointerdown',
+  function (e) {
+    if (!scAdoptEl) return
+    if (e.target && e.target.closest && e.target.closest('#dshpet-smpadopt')) return
+    closeScAdopt()
+  },
+  true,
+)
+
+// ============================================================================
+// 阶段四：分组管理弹窗（新建 / 重命名 / 删除）
+// ============================================================================
+function closeScGroupMgr() {
+  if (!scGroupMgrEl) return
+  try {
+    scGroupMgrEl.remove()
+  } catch (err) {}
+  scGroupMgrEl = null
+}
+
+function scGroupRowEl(g, count) {
+  var row = document.createElement('div')
+  row.className = 'dshpet-smp-groups-row'
+  var name = document.createElement('span')
+  name.className = 'dshpet-smp-groups-name'
+  name.textContent = g.name
+  row.appendChild(name)
+  var cnt = document.createElement('span')
+  cnt.className = 'dshpet-smp-group-count'
+  cnt.textContent = count + ' 个脚本'
+  row.appendChild(cnt)
+  var spacer = document.createElement('span')
+  spacer.style.flex = '1'
+  row.appendChild(spacer)
+  var rn = document.createElement('button')
+  rn.type = 'button'
+  rn.className = 'dshpet-smp-btn'
+  rn.textContent = '重命名'
+  rn.addEventListener('click', async function () {
+    var v = await scPrompt('给分组「' + g.name + '」起个新名字', g.name)
+    if (v === null) return
+    var r = null
+    if (bridge && bridge.groupRename) r = await bridge.groupRename(g.id, v)
+    await scGroupMgrRefresh()
+    await scRefresh()
+    if (r && !r.ok) scSetStatus(r.error || '改名失败')
+  })
+  row.appendChild(rn)
+  var rm = document.createElement('button')
+  rm.type = 'button'
+  rm.className = 'dshpet-smp-btn'
+  rm.textContent = '删除'
+  rm.addEventListener('click', async function () {
+    var ok = false
+    try {
+      ok = window.confirm('删除分组「' + g.name + '」？\n\n组里的脚本会回到「未分组」，脚本本身不删。')
+    } catch (err) {}
+    if (!ok) return
+    var r = null
+    if (bridge && bridge.groupRemove) r = await bridge.groupRemove(g.id)
+    await scGroupMgrRefresh()
+    await scRefresh()
+    if (r && !r.ok) scSetStatus(r.error || '删除失败')
+  })
+  row.appendChild(rm)
+  return row
+}
+
+async function scGroupMgrRefresh() {
+  if (!scGroupMgrEl) return
+  var listEl = scGroupMgrEl.querySelector('.dshpet-smp-groups-list')
+  var r = null
+  if (bridge && bridge.groupList) r = await bridge.groupList()
+  var groups = (r && r.ok && r.groups) || []
+  scGroups = groups
+  listEl.textContent = ''
+  if (!groups.length) {
+    var e = document.createElement('div')
+    e.className = 'dshpet-smp-adopt-empty'
+    e.textContent = '还没有分组。\n下面填个名字点「新建分组」。'
+    listEl.appendChild(e)
+  }
+  for (var i = 0; i < groups.length; i++) {
+    var cnt = scItems.filter(function (x) { return x.group === groups[i].id }).length
+    listEl.appendChild(scGroupRowEl(groups[i], cnt))
+  }
+}
+
+async function openScGroupMgr(focusId) {
+  closeScGroupMgr()
+  closeScCtxMenu()
+  var box = document.createElement('div')
+  box.id = 'dshpet-smpgroups'
+  box.className = 'dshpet-smp-groups'
+  var head = document.createElement('div')
+  head.className = 'dshpet-smp-adopt-head'
+  head.textContent = '分组管理（组按创建顺序排）'
+  head.style.userSelect = 'none'
+  var x = document.createElement('button')
+  x.type = 'button'
+  x.className = 'dshpet-smp-close'
+  x.textContent = '✕'
+  x.addEventListener('click', function (e) {
+    e.stopPropagation()
+    closeScGroupMgr()
+  })
+  head.appendChild(x)
+  box.appendChild(head)
+  var list = document.createElement('div')
+  list.className = 'dshpet-smp-groups-list'
+  box.appendChild(list)
+  var newRow = document.createElement('div')
+  newRow.className = 'dshpet-smp-groups-new'
+  var input = document.createElement('input')
+  input.type = 'text'
+  input.className = 'dshpet-smp-input dshpet-smp-groups-input'
+  input.placeholder = '新分组名'
+  input.maxLength = 60
+  input.spellcheck = false
+  newRow.appendChild(input)
+  var createBtn = document.createElement('button')
+  createBtn.type = 'button'
+  createBtn.className = 'dshpet-smp-btn dshpet-smp-btn-primary'
+  createBtn.textContent = '新建分组'
+  createBtn.addEventListener('click', async function () {
+    var r = null
+    if (bridge && bridge.groupCreate) r = await bridge.groupCreate(input.value)
+    if (r && r.ok) {
+      input.value = ''
+      await scGroupMgrRefresh()
+      await scRefresh()
+    } else {
+      scSetStatus((r && r.error) || '新建失败')
+    }
+  })
+  newRow.appendChild(createBtn)
+  var spacer = document.createElement('span')
+  spacer.style.flex = '1'
+  newRow.appendChild(spacer)
+  var closeBtn = document.createElement('button')
+  closeBtn.type = 'button'
+  closeBtn.className = 'dshpet-smp-btn'
+  closeBtn.textContent = '关闭'
+  closeBtn.addEventListener('click', function () {
+    closeScGroupMgr()
+  })
+  newRow.appendChild(closeBtn)
+  box.appendChild(newRow)
+
+  scRoot.appendChild(box)
+  scGroupMgrEl = box
+  var vw = window.innerWidth
+  var vh = window.innerHeight
+  var w = box.offsetWidth
+  box.style.left = Math.max(8, Math.round((vw - w) / 2)) + 'px'
+  box.style.top = Math.round(vh / 3) + 'px'
+  await scGroupMgrRefresh()
+  try {
+    input.focus()
+  } catch (err) {}
+  if (focusId) {
+    var first = list.querySelector('.dshpet-smp-groups-row')
+    // 简化：v1 不滚动定位，focusId 只用来区分入口（暂无特殊行为）
+    void focusId
+    void first
+  }
+}
+
+window.addEventListener(
+  'pointerdown',
+  function (e) {
+    if (!scGroupMgrEl) return
+    if (e.target && e.target.closest && (e.target.closest('#dshpet-smpgroups') || e.target.closest('#dshpet-smpprompt'))) return
+    closeScGroupMgr()
+  },
+  true,
+)
+
+// 通用小输入弹窗（分组重命名用；window.prompt 在 Electron 里不可用）
+function closeScPrompt() {
+  if (!scPromptEl) return
+  try {
+    scPromptEl.remove()
+  } catch (err) {}
+  scPromptEl = null
+}
+
+function scPrompt(title, initial) {
+  return new Promise(function (resolve) {
+    closeScPrompt()
+    var box = document.createElement('div')
+    box.id = 'dshpet-smpprompt'
+    box.className = 'dshpet-smp-rename'
+    var label = document.createElement('div')
+    label.className = 'dshpet-smp-rename-label'
+    label.textContent = title
+    box.appendChild(label)
+    var input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'dshpet-smp-rename-input'
+    input.value = initial || ''
+    input.maxLength = 60
+    input.spellcheck = false
+    box.appendChild(input)
+    var row = document.createElement('div')
+    row.className = 'dshpet-smp-rename-row'
+    var okBtn = document.createElement('button')
+    okBtn.type = 'button'
+    okBtn.className = 'dshpet-smp-btn dshpet-smp-btn-primary'
+    okBtn.textContent = '确定'
+    var cancelBtn = document.createElement('button')
+    cancelBtn.type = 'button'
+    cancelBtn.className = 'dshpet-smp-btn'
+    cancelBtn.textContent = '取消'
+    row.appendChild(okBtn)
+    row.appendChild(cancelBtn)
+    box.appendChild(row)
+    var finish = function (value) {
+      closeScPrompt()
+      resolve(value)
+    }
+    okBtn.addEventListener('click', function () {
+      finish(input.value)
+    })
+    cancelBtn.addEventListener('click', function () {
+      finish(null)
+    })
+    input.addEventListener('keydown', function (e) {
+      e.stopPropagation()
+      if (e.key === 'Enter') finish(input.value)
+      else if (e.key === 'Escape') finish(null)
+    })
+    scRoot.appendChild(box)
+    scPromptEl = box
+    var vw = window.innerWidth
+    var vh = window.innerHeight
+    var w = box.offsetWidth
+    box.style.left = Math.max(8, Math.round((vw - w) / 2)) + 'px'
+    box.style.top = Math.round(vh / 3) + 'px'
+    try {
+      input.focus()
+      input.select()
+    } catch (err) {}
+  })
 }
 
 function scFmtDateTime(ms) {
@@ -1589,6 +2452,9 @@ function mountJiaobenPanel(root, opts) {
       closeScExamples()
       closeScSched()
       closeScPyDlg()
+      closeScAdopt()
+      closeScGroupMgr()
+      closeScPrompt()
       try {
         root.appendChild(scPanelEl)
         scRoot = root
@@ -1694,6 +2560,15 @@ function mountJiaobenPanel(root, opts) {
     openScExamples()
   })
   tb2.appendChild(exBtn)
+  var adoptBtn = document.createElement('button')
+  adoptBtn.type = 'button'
+  adoptBtn.className = 'dshpet-smp-btn'
+  adoptBtn.textContent = '收纳管理'
+  adoptBtn.title = '待收纳清单 / 不收编名单 / 自动收纳与子目录收纳开关'
+  adoptBtn.addEventListener('click', function () {
+    openScAdopt()
+  })
+  tb2.appendChild(adoptBtn)
   var spacer2 = document.createElement('span')
   spacer2.style.flex = '1'
   tb2.appendChild(spacer2)
@@ -1732,9 +2607,51 @@ function mountJiaobenPanel(root, opts) {
   var main = document.createElement('div')
   main.className = 'dshpet-smp-main'
 
+  // 左列：搜索 + 排序控件、脚本列表（分组视图）、底部批量操作条
+  var listCol = document.createElement('div')
+  listCol.className = 'dshpet-smp-listcol'
+  var ctrls = document.createElement('div')
+  ctrls.className = 'dshpet-smp-listctrls'
+  scSearchEl = document.createElement('input')
+  scSearchEl.type = 'text'
+  scSearchEl.className = 'dshpet-smp-search'
+  scSearchEl.placeholder = '搜索脚本名…'
+  scSearchEl.spellcheck = false
+  scSearchEl.addEventListener('input', function () {
+    scSearch = scSearchEl.value
+    renderScList()
+  })
+  ctrls.appendChild(scSearchEl)
+  scSortEl = document.createElement('select')
+  scSortEl.className = 'dshpet-smp-sortsel'
+  scSortEl.title = '列表排序（只影响组内顺序）'
+  var sortOpts = [
+    ['order', '创建顺序'],
+    ['name', '按名字'],
+    ['created', '按创建时间'],
+    ['recent', '最近运行'],
+  ]
+  for (var so = 0; so < sortOpts.length; so++) {
+    var soEl = document.createElement('option')
+    soEl.value = sortOpts[so][0]
+    soEl.textContent = sortOpts[so][1]
+    scSortEl.appendChild(soEl)
+  }
+  scSortEl.value = scSortKey
+  scSortEl.addEventListener('change', function () {
+    scSortKey = scSortEl.value
+    renderScList()
+  })
+  ctrls.appendChild(scSortEl)
+  listCol.appendChild(ctrls)
   scListEl = document.createElement('div')
   scListEl.className = 'dshpet-smp-list'
-  main.appendChild(scListEl)
+  listCol.appendChild(scListEl)
+  scBulkEl = document.createElement('div')
+  scBulkEl.className = 'dshpet-smp-bulk'
+  scBulkEl.style.display = 'none'
+  listCol.appendChild(scBulkEl)
+  main.appendChild(listCol)
 
   var right = document.createElement('div')
   right.className = 'dshpet-smp-right'
@@ -1845,6 +2762,16 @@ if (bridge && bridge.onScriptLog) {
       if (p && p.id === scSelId) appendScLogLine(p)
     }
     scAutoScroll()
+  })
+}
+
+// 自动收纳订阅：主进程收编了新脚本推过来，面板刷新列表并提示（面板关着就不打扰）
+if (bridge && bridge.onAdopted) {
+  bridge.onAdopted(async function (payload) {
+    if (!scPanelEl) return
+    if (scAdoptEl) await scAdoptRefresh()
+    await scRefresh()
+    scSetStatus('自动收纳收编 ' + ((payload && payload.count) || 0) + ' 个新脚本')
   })
 }
 

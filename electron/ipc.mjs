@@ -13,13 +13,19 @@
 //   app.whenReady().then(() => jb.start())
 //   app.on('before-quit', ... await jb.stopAll())
 //
-// 频道清单（全部 jb: 前缀，共 28 个 invoke + 1 个 push）：
+// 频道清单（全部 jb: 前缀，invoke + 2 个 push）：
 //   面板：script-config-get / python-check / dir-set / save / remove / read / write
 //         / run / schedule / cron-preview / python-set-path / python-clear / stop
 //         / log-history / status / open-dir / rescan / clone / rename / import
 //         / open-editor / clipboard-read
+//   收纳（阶段四）：script-scan-candidates / script-adopt / script-ignore
+//         / script-unexclude / script-excluded-list / script-opts-get
+//         / script-opts-set / script-group-list / script-group-create
+//         / script-group-rename / script-group-remove / script-group-move
+//         / script-enabled
 //   示例库：ex-list / ex-read / ex-create / ex-update / ex-remove / ex-import
 //   push：jb:script-log（批量日志，攒 100ms 发一批）
+//         jb:script-adopted（自动收纳收编新脚本时推给面板刷新）
 // ============================================================================
 
 import fs from 'node:fs'
@@ -37,6 +43,7 @@ import {
 import { createExamplesStore } from '../src/examples.mjs'
 
 export const SCRIPT_LOG_CHANNEL = 'jb:script-log'
+export const SCRIPT_ADOPTED_CHANNEL = 'jb:script-adopted'
 
 export function registerJiaobenIpc(opts) {
   opts = opts || {}
@@ -94,9 +101,18 @@ export function registerJiaobenIpc(opts) {
           else cronError = nx.error
         }
       }
-      return { ...it, exists, running: instances.length, instances, alarm, nextRun, cronError }
+      return { ...it, exists, running: instances.length, instances, alarm, nextRun, cronError, lastRunAt: runner ? runner.lastRun(it.id) : null }
     })
-    return { ok: true, dir: cfg.dir, items, python: pythonInfo, pythonPath: cfg.pythonPath }
+    return {
+      ok: true,
+      dir: cfg.dir,
+      items,
+      python: pythonInfo,
+      pythonPath: cfg.pythonPath,
+      groups: cfg.groups || [],
+      opts: cfg.opts || { deepAdopt: false, autoAdopt: false },
+      excluded: cfg.excluded || [],
+    }
   })
 
   // ---------- Python ----------
@@ -180,7 +196,7 @@ export function registerJiaobenIpc(opts) {
     if (res.ok) log('[jb] 已删除 ' + id + (res.deletedFile ? '（含文件）' : ''))
     return res
   })
-  // 重新扫描：目录里新放进去的 .js/.py（一级）收编进花名册；旧条目只标「找不到文件」不删
+  // 重新扫描：目录里新放进去的 .js/.py（一级；子目录收纳开关打开时含子目录）收编进花名册；旧条目只标「找不到文件」不删
   ipcMain.handle('jb:script-rescan', () => {
     const res = store.rescan()
     if (res.ok) {
@@ -191,6 +207,70 @@ export function registerJiaobenIpc(opts) {
           (res.added.map((a) => a.file).join(', ') || '无') +
           '）',
       )
+    }
+    return res
+  })
+
+  // ---------- 收纳管理（阶段四）----------
+  ipcMain.handle('jb:script-scan-candidates', () => {
+    return store.scanCandidates()
+  })
+  ipcMain.handle('jb:script-adopt', (_e, files) => {
+    const res = store.adopt(files)
+    if (res.ok && res.added.length) {
+      log('[jb] 收编 ' + res.added.length + ' 个脚本（' + res.added.map((a) => a.file).join(', ') + '）')
+    }
+    return res
+  })
+  ipcMain.handle('jb:script-ignore', (_e, files) => {
+    const cfg = store.ignore(files)
+    log('[jb] 加入不收编名单：' + (Array.isArray(files) ? files.join(', ') : files))
+    return { ok: true, excluded: cfg.excluded || [] }
+  })
+  ipcMain.handle('jb:script-unexclude', (_e, file) => {
+    const cfg = store.unexclude(file)
+    log('[jb] 恢复收纳：' + file)
+    return { ok: true, excluded: cfg.excluded || [] }
+  })
+  ipcMain.handle('jb:script-excluded-list', () => {
+    return { ok: true, files: store.listExcluded() }
+  })
+  ipcMain.handle('jb:script-opts-get', () => {
+    return { ok: true, opts: store.read().opts || { deepAdopt: false, autoAdopt: false } }
+  })
+  ipcMain.handle('jb:script-opts-set', (_e, patch) => {
+    patch = patch || {}
+    if (typeof patch.deepAdopt === 'boolean') store.setDeepAdopt(patch.deepAdopt)
+    if (typeof patch.autoAdopt === 'boolean') store.setAutoAdopt(patch.autoAdopt)
+    const opts = store.read().opts || { deepAdopt: false, autoAdopt: false }
+    log('[jb] 收纳选项：子目录=' + opts.deepAdopt + ' 自动收纳=' + opts.autoAdopt)
+    return { ok: true, opts: opts }
+  })
+  ipcMain.handle('jb:script-group-list', () => {
+    return { ok: true, groups: store.read().groups || [] }
+  })
+  ipcMain.handle('jb:script-group-create', (_e, name) => {
+    return store.groupCreate(name)
+  })
+  ipcMain.handle('jb:script-group-rename', (_e, id, name) => {
+    return store.groupRename(id, name)
+  })
+  ipcMain.handle('jb:script-group-remove', (_e, id) => {
+    return store.groupRemove(id)
+  })
+  ipcMain.handle('jb:script-group-move', (_e, scriptId, groupId) => {
+    return store.groupMove(scriptId, groupId)
+  })
+  // 停用/启用：停用只停自动（定时/随启动/长驻全跳过），手动运行不受影响；
+  // 停用时把正在跑的长驻实例先停掉（带 exitRequested 标记，守护不会自动拉起）
+  ipcMain.handle('jb:script-enabled', async (_e, id, on) => {
+    const res = store.setEnabled(id, on)
+    if (res.ok && !on) {
+      const instances = (runner.status()[id] || []).filter((x) => x.intent === 'daemon')
+      for (const x of instances) {
+        await runner.stop(id, x.inst)
+      }
+      if (instances.length) log('[jb] 停用 ' + res.item.name + '：已停掉 ' + instances.length + ' 个长驻实例')
     }
     return res
   })
@@ -396,6 +476,10 @@ export function registerJiaobenIpc(opts) {
       runner: runner,
       dataDir: dataDir,
       log: log,
+      onAdopt: function (added) {
+        // 自动收纳收编了新脚本：推给面板刷新列表（面板关着也没事，环形缓冲/下次 config-get 兜底）
+        send(SCRIPT_ADOPTED_CHANNEL, { count: added.length, items: added })
+      },
       ready: function () {
         return pythonChecking || Promise.resolve()
       },

@@ -273,6 +273,8 @@ function sanitize(input, now) {
     onStartup: input.onStartup === true, // 阶段三：随应用启动
     daemon: input.daemon === true, // 阶段三：长驻自动拉起
     closeAfterRun: input.closeAfterRun === true, // 阶段三：启动成功后自动收起脚本管理器面板
+    group: typeof input.group === 'string' && input.group ? input.group : null, // 收纳：所属分组 id（null = 未分组）
+    enabled: input.enabled !== false, // 收纳：停用 = 停自动（定时/随启动/长驻），手动运行不拦
     createdAt: Number(input.createdAt) || now,
     updatedAt: Number(input.updatedAt) || now,
   }
@@ -298,9 +300,33 @@ export function createScriptsStore({ dataDir, log = function () {} }) {
           : [],
         // 阶段三：Python 自填路径（优先于自动检测；''/null 表示没自填）
         pythonPath: typeof (parsed && parsed.pythonPath) === 'string' && parsed.pythonPath ? parsed.pythonPath : null,
+        // 收纳：分组（v1 按创建顺序排；老数据没有就是空数组）
+        groups: Array.isArray(parsed && parsed.groups)
+          ? parsed.groups
+            .map(function (g) {
+              return {
+                id: String((g && g.id) || ''),
+                name: String((g && g.name) || '').trim().slice(0, 60),
+                createdAt: Number(g && g.createdAt) || now,
+              }
+            })
+            .filter(function (g) { return g.id && g.name })
+          : [],
+        // 收纳：收纳选项（子目录收纳 / 自动收纳，默认都关——老数据读进来就是默认值，天然迁移）
+        opts: {
+          deepAdopt: !!(parsed && parsed.opts && parsed.opts.deepAdopt),
+          autoAdopt: !!(parsed && parsed.opts && parsed.opts.autoAdopt),
+        },
       }
     } catch (err) {
-      return { dir: null, items: [], excluded: [], pythonPath: null }
+      return {
+        dir: null,
+        items: [],
+        excluded: [],
+        pythonPath: null,
+        groups: [],
+        opts: { deepAdopt: false, autoAdopt: false },
+      }
     }
   }
 
@@ -313,6 +339,8 @@ export function createScriptsStore({ dataDir, log = function () {} }) {
         items: cfg.items,
         excluded: cfg.excluded || [],
         pythonPath: cfg.pythonPath || null,
+        groups: cfg.groups || [],
+        opts: cfg.opts || { deepAdopt: false, autoAdopt: false },
       },
       null,
       2,
@@ -342,6 +370,9 @@ export function createScriptsStore({ dataDir, log = function () {} }) {
       const i = cfg.items.findIndex(function (x) { return x.id === clean.id })
       if (i >= 0) {
         clean.createdAt = cfg.items[i].createdAt || clean.createdAt
+        // 更新时没带收纳字段就沿用旧值（避免普通编辑把分组/停用状态冲掉）
+        if (input.group === undefined) clean.group = cfg.items[i].group
+        if (input.enabled === undefined) clean.enabled = cfg.items[i].enabled
         cfg.items[i] = clean
       } else {
         if (cfg.items.length >= MAX_SCRIPTS) return { ok: false, error: '最多 ' + MAX_SCRIPTS + ' 个脚本' }
@@ -386,41 +417,16 @@ export function createScriptsStore({ dataDir, log = function () {} }) {
       return { ok: true, items: cfg.items, dir: cfg.dir, deletedFile: deletedFile }
     },
     /**
-     * 重新扫描：列表和目录对账。只收编目录**一级**的 .js / .py 新文件
-     * （子目录不动——以后放示例/资源的地方），文件名按大小写不敏感去重；
+     * 重新扫描：列表和目录对账，把新面孔收编进花名册。
+     * 收编范围由 opts.deepAdopt 决定：关 = 只收一级（和 v0.1.3 行为一致），
+     * 开 = 子目录里的 .js/.py 一起收（拍板 C）。内部就调 scanCandidates + adopt。
      * 「找不到文件」的旧条目按计划不自动删，留给用户自己决定。
      */
     rescan: function () {
-      const cfg = read()
-      if (!cfg.dir) return { ok: false, error: '请先选择脚本目录' }
-      let entries = []
-      try {
-        entries = fs
-          .readdirSync(cfg.dir, { withFileTypes: true })
-          .filter(function (d) { return d.isFile() })
-          .map(function (d) { return d.name })
-      } catch (err) {
-        return { ok: false, error: '读取目录失败: ' + ((err && err.message) || err) }
-      }
-      const known = {}
-      cfg.items.forEach(function (x) { known[String(x.file).toLowerCase()] = true })
-      ;(cfg.excluded || []).forEach(function (f) { known[String(f).toLowerCase()] = true })
-      const EXT = { '.js': 'js', '.py': 'py' }
-      const added = []
-      const self = this
-      for (const f of entries) {
-        const dot = f.lastIndexOf('.')
-        if (dot <= 0) continue
-        const lang = EXT[f.slice(dot).toLowerCase()]
-        if (!lang) continue
-        if (known[f.toLowerCase()]) continue
-        const res = self.save({ name: f.slice(0, dot), file: f, lang: lang })
-        if (res.ok) {
-          added.push(res.item)
-          known[f.toLowerCase()] = true
-        }
-      }
-      return { ok: true, added: added, dir: cfg.dir, items: read().items }
+      const scan = this.scanCandidates()
+      if (!scan.ok) return scan
+      const res = this.adopt(scan.candidates.map(function (c) { return c.rel }))
+      return { ok: true, added: res.added, dir: scan.dir, items: read().items }
     },
     /** 克隆：复制文件生成「xxx 副本.js」（撞名自动加 2、3…），并登记花名册 */
     clone: function (id) {
@@ -430,17 +436,22 @@ export function createScriptsStore({ dataDir, log = function () {} }) {
       if (!cfg.dir) return { ok: false, error: '请先选择脚本目录' }
       if (cfg.items.length >= MAX_SCRIPTS) return { ok: false, error: '最多 ' + MAX_SCRIPTS + ' 个脚本' }
       const dot = item.file.lastIndexOf('.')
-      const base = dot > 0 ? item.file.slice(0, dot) : item.file
+      const slash = Math.max(item.file.lastIndexOf('/'), item.file.lastIndexOf('\\'))
+      const dirPart = slash > 0 ? item.file.slice(0, slash + 1) : ''
+      const base = dot > 0 ? item.file.slice(slash + 1, dot) : item.file.slice(slash + 1)
       const ext = dot > 0 ? item.file.slice(dot) : ''
       const srcPath = path.join(cfg.dir, item.file)
       if (!fs.existsSync(srcPath)) return { ok: false, error: '找不到源文件，无法克隆' }
       const taken = {}
       cfg.items.forEach(function (x) { taken[String(x.file).toLowerCase()] = true })
       let newFile = null
+      let newName = null
       for (let n = 0; n < 100; n++) {
-        const cand = base + ' 副本' + (n ? String(n + 1) : '') + ext
+        // 副本放在原文件旁边（子目录脚本的副本也留在子目录里）
+        const cand = dirPart + base + ' 副本' + (n ? String(n + 1) : '') + ext
         if (!taken[cand.toLowerCase()] && !fs.existsSync(path.join(cfg.dir, cand))) {
           newFile = cand
+          newName = base + ' 副本' + (n ? String(n + 1) : '')
           break
         }
       }
@@ -450,7 +461,7 @@ export function createScriptsStore({ dataDir, log = function () {} }) {
       } catch (err) {
         return { ok: false, error: '复制文件失败: ' + ((err && err.message) || err) }
       }
-      const res = this.save({ name: newFile.slice(0, newFile.length - ext.length), file: newFile, lang: item.lang })
+      const res = this.save({ name: newName, file: newFile, lang: item.lang })
       if (!res.ok) return res
       return { ok: true, item: res.item }
     },
@@ -468,7 +479,10 @@ export function createScriptsStore({ dataDir, log = function () {} }) {
       if (/[\\/:*?"<>|]/.test(base)) return { ok: false, error: '名字里不能有 \\ / : * ? " < > | 这些字符' }
       const dot = item.file.lastIndexOf('.')
       const ext = dot > 0 ? item.file.slice(dot) : ''
-      const newFile = base + ext
+      // 子目录脚本：只改文件名，目录部分不动（file 字段存的是相对路径，改名不挪窝）
+      const slash = Math.max(item.file.lastIndexOf('/'), item.file.lastIndexOf('\\'))
+      const dirPart = slash > 0 ? item.file.slice(0, slash + 1) : ''
+      const newFile = dirPart + base + ext
       const lowNew = newFile.toLowerCase()
       const lowOld = item.file.toLowerCase()
       if (lowNew !== lowOld) {
@@ -537,6 +551,199 @@ export function createScriptsStore({ dataDir, log = function () {} }) {
       write(cfg)
       return cfg
     },
+
+    // --------------------------------------------------------------------
+    // 收纳管理（阶段四）：扫描候选 / 收编 / 不收编名单 / 子目录与自动收纳开关
+    // --------------------------------------------------------------------
+
+    /**
+     * 扫描目录里「还没收编」的脚本候选。一级还是递归由 opts.deepAdopt 决定；
+     * 已登记和「不收编」名单里的文件都跳过（相对路径大小写不敏感比对）。
+     * 返回 { ok, candidates: [{ path, rel, file, name, lang }] }。
+     */
+    scanCandidates: function () {
+      const cfg = read()
+      if (!cfg.dir) return { ok: false, error: '请先选择脚本目录' }
+      const EXT = { '.js': 'js', '.py': 'py' }
+      const known = {}
+      cfg.items.forEach(function (x) { known[String(x.file).toLowerCase()] = true })
+      ;(cfg.excluded || []).forEach(function (f) { known[String(f).toLowerCase()] = true })
+      const deep = !!(cfg.opts && cfg.opts.deepAdopt)
+      const out = []
+      function walk(dirRel) {
+        const abs = dirRel ? path.join(cfg.dir, dirRel) : cfg.dir
+        let entries = []
+        try {
+          entries = fs.readdirSync(abs, { withFileTypes: true })
+        } catch (err) {
+          return // 读不了的子目录跳过，别让一次扫描全盘失败
+        }
+        for (const d of entries) {
+          if (d.isFile()) {
+            const rel = dirRel ? dirRel + '/' + d.name : d.name
+            const dot = d.name.lastIndexOf('.')
+            if (dot <= 0) continue
+            const lang = EXT[d.name.slice(dot).toLowerCase()]
+            if (!lang) continue
+            if (known[rel.toLowerCase()]) continue
+            out.push({ path: path.join(cfg.dir, rel), rel: rel, file: d.name, name: d.name.slice(0, dot), lang: lang })
+          } else if (deep && d.isDirectory()) {
+            walk(dirRel ? dirRel + '/' + d.name : d.name)
+          }
+        }
+      }
+      walk(null)
+      return { ok: true, candidates: out, dir: cfg.dir, deep: deep }
+    },
+
+    /**
+     * 收编：把候选（相对路径列表）登记进花名册。主目录文件记「文件名」，
+     * 子目录文件记「子目录/文件名」（file 字段存相对路径，旧字段名沿用）。
+     * 已收编的跳过；收编的同时会把它从「不收编」名单里放出来（save 自带）。
+     */
+    adopt: function (files) {
+      const cfg = read()
+      if (!cfg.dir) return { ok: false, error: '请先选择脚本目录' }
+      const EXT = { '.js': 'js', '.py': 'py' }
+      const added = []
+      const failed = []
+      const list = Array.isArray(files) ? files : []
+      for (const f of list) {
+        const rel = String(f == null ? '' : f).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+        if (!rel) continue
+        const dot = rel.lastIndexOf('.')
+        const ext = dot > 0 ? rel.slice(dot).toLowerCase() : ''
+        const lang = EXT[ext]
+        if (!lang) { failed.push({ file: rel, error: '不是 .js / .py 文件' }); continue }
+        const abs = path.join(cfg.dir, rel)
+        if (!fs.existsSync(abs)) { failed.push({ file: rel, error: '文件不存在' }); continue }
+        if (cfg.items.some(function (x) { return String(x.file).toLowerCase() === rel.toLowerCase() })) continue
+        if (cfg.items.length + added.length >= MAX_SCRIPTS) {
+          failed.push({ file: rel, error: '最多 ' + MAX_SCRIPTS + ' 个脚本' })
+          continue
+        }
+        const stem = rel.slice(0, dot)
+        const baseName = stem.split('/').pop()
+        const res = this.save({ name: baseName, file: rel, lang: lang })
+        if (res.ok) added.push(res.item)
+        else failed.push({ file: rel, error: res.error })
+      }
+      return { ok: true, added: added, failed: failed, items: read().items }
+    },
+
+    /** 收纳：把候选文件加进「不收编」名单（扫描/自动收纳以后都跳过） */
+    ignore: function (files) {
+      const cfg = read()
+      const list = Array.isArray(files)
+        ? files.map(function (f) { return String(f == null ? '' : f).replace(/\\/g, '/') })
+        : []
+      cfg.excluded = cfg.excluded || []
+      list.forEach(function (f) {
+        if (f && !cfg.excluded.some(function (x) { return String(x).toLowerCase() === f.toLowerCase() })) {
+          cfg.excluded.push(f)
+        }
+      })
+      write(cfg)
+      return cfg
+    },
+
+    /** 收纳：把文件从「不收编」名单里放出来（下次扫描会重新出现在候选里） */
+    unexclude: function (file) {
+      const cfg = read()
+      const rel = String(file == null ? '' : file).replace(/\\/g, '/')
+      cfg.excluded = (cfg.excluded || []).filter(function (f) { return String(f).toLowerCase() !== rel.toLowerCase() })
+      write(cfg)
+      return cfg
+    },
+
+    listExcluded: function () {
+      return (read().excluded || []).slice()
+    },
+
+    /** 收纳：子目录收纳开关（开 = 递归扫子目录；关 = 只收一级） */
+    setDeepAdopt: function (on) {
+      const cfg = read()
+      cfg.opts = cfg.opts || { deepAdopt: false, autoAdopt: false }
+      cfg.opts.deepAdopt = on === true
+      write(cfg)
+      return cfg
+    },
+
+    /** 收纳：自动收纳开关（开 = 调度器每 30 秒扫一次，新文件自动进列表） */
+    setAutoAdopt: function (on) {
+      const cfg = read()
+      cfg.opts = cfg.opts || { deepAdopt: false, autoAdopt: false }
+      cfg.opts.autoAdopt = on === true
+      write(cfg)
+      return cfg
+    },
+
+    /** 收纳：新建分组（同名不区分大小写拦截；v1 按创建顺序排） */
+    groupCreate: function (name) {
+      const cfg = read()
+      const clean = String(name || '').trim().slice(0, 60)
+      if (!clean) return { ok: false, error: '分组名不能为空' }
+      if (cfg.groups.some(function (g) { return g.name.toLowerCase() === clean.toLowerCase() })) {
+        return { ok: false, error: '已有同名分组：' + clean }
+      }
+      const g = {
+        id: 'grp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        name: clean,
+        createdAt: Date.now(),
+      }
+      cfg.groups.push(g)
+      write(cfg)
+      return { ok: true, group: g, groups: cfg.groups }
+    },
+
+    groupRename: function (id, name) {
+      const cfg = read()
+      const g = cfg.groups.find(function (x) { return x.id === id })
+      if (!g) return { ok: false, error: '找不到该分组' }
+      const clean = String(name || '').trim().slice(0, 60)
+      if (!clean) return { ok: false, error: '分组名不能为空' }
+      if (cfg.groups.some(function (x) { return x.id !== id && x.name.toLowerCase() === clean.toLowerCase() })) {
+        return { ok: false, error: '已有同名分组：' + clean }
+      }
+      g.name = clean
+      write(cfg)
+      return { ok: true, groups: cfg.groups }
+    },
+
+    /** 收纳：删分组只删组，组里的脚本回到「未分组」，脚本本身不动 */
+    groupRemove: function (id) {
+      const cfg = read()
+      if (!cfg.groups.some(function (x) { return x.id === id })) return { ok: false, error: '找不到该分组' }
+      cfg.groups = cfg.groups.filter(function (x) { return x.id !== id })
+      cfg.items.forEach(function (x) { if (x.group === id) x.group = null })
+      write(cfg)
+      return { ok: true, groups: cfg.groups, items: cfg.items }
+    },
+
+    /** 收纳：把脚本移进分组（groupId 传 null = 移回未分组） */
+    groupMove: function (scriptId, groupId) {
+      const cfg = read()
+      const item = cfg.items.find(function (x) { return x.id === scriptId })
+      if (!item) return { ok: false, error: '找不到该脚本' }
+      if (groupId !== null && !cfg.groups.some(function (g) { return g.id === groupId })) {
+        return { ok: false, error: '找不到该分组' }
+      }
+      item.group = groupId
+      item.updatedAt = Date.now()
+      write(cfg)
+      return { ok: true, item: item }
+    },
+
+    /** 收纳：停用/启用。停用 = 停自动（定时/随启动/长驻都不跑），手动「运行」不拦，配置保留 */
+    setEnabled: function (id, on) {
+      const cfg = read()
+      const item = cfg.items.find(function (x) { return x.id === id })
+      if (!item) return { ok: false, error: '找不到该脚本' }
+      item.enabled = on !== false
+      item.updatedAt = Date.now()
+      write(cfg)
+      return { ok: true, item: item }
+    },
   }
 }
 
@@ -554,6 +761,7 @@ const INTENT_LABEL = { manual: '', startup: '随启动', cron: '定时', daemon:
 export function createScriptRunner({ store, sendLog = function () {}, getPython = function () { return null }, log = function () {} }) {
   const running = new Map() // scriptId -> [instance, ...]
   const buffers = new Map() // scriptId -> [{kind,text,ts}]
+  const lastRunAt = new Map() // scriptId -> 最近一次启动时间戳（会话内，供列表「最近运行」排序）
   let seq = 0
   let pending = []
   let flushTimer = null
@@ -597,6 +805,7 @@ export function createScriptRunner({ store, sendLog = function () {}, getPython 
           inst: t.inst,
           startedAt: t.startedAt,
           exitRequested: t.exitRequested,
+          intent: t.intent || 'manual',
           pid: t.child && t.child.pid ? t.child.pid : null,
         }
       })
@@ -673,6 +882,7 @@ export function createScriptRunner({ store, sendLog = function () {}, getPython 
     }
     if (!running.has(id)) running.set(id, [])
     running.get(id).push(inst)
+    lastRunAt.set(id, Date.now())
 
     const label = opts.label || INTENT_LABEL[inst.intent] || ''
     queueLine(id, { kind: 'sys', text: '▶ 启动 ' + item.name + '（实例 ' + inst.inst + '，pid ' + child.pid + (label ? '，' + label : '') + '）' })
@@ -766,6 +976,8 @@ export function createScriptRunner({ store, sendLog = function () {}, getPython 
     history: history,
     status: status,
     running: function () { return running },
+    /** 收纳阶段：脚本最近一次启动时间（会话内；没跑过返回 null，列表按「最近运行」排序用） */
+    lastRun: function (id) { return lastRunAt.get(id) || null },
     /** 调度器用：往脚本日志里插一条系统行（如「文件不存在，定时未启动」） */
     sysLine: function (id, text) {
       queueLine(id, { kind: 'sys', text: String(text || '') })
@@ -793,14 +1005,17 @@ const CATCHUP_MAX_MIN = 7 * 24 * 60 // 补跑只认 7 天内的错过的点
 const CRASH_WINDOW_MS = 30 * 1000 // 长驻冷却窗口
 const CRASH_MAX = 3 // 窗口内崩 3 次停止自动拉起
 const RELAUNCH_DELAY_MS = 1000 // 意外退出后 1 秒再拉起
+const AUTOADOPT_POLL_MS = 30 * 1000 // 收纳：自动收纳轮询间隔（开关默认关）
 
-export function createScriptScheduler({ store, runner, dataDir, log = function () {}, ready = function () { return Promise.resolve() } }) {
+export function createScriptScheduler({ store, runner, dataDir, log = function () {}, ready = function () { return Promise.resolve() }, autoAdoptMs = 0, onAdopt = function () {} }) {
   const stateFile = path.join(dataDir, SCHEDULE_STATE_FILE)
   const alarms = new Map() // scriptId -> 标红文案
   const crashTimes = new Map() // scriptId -> [最近退出时间戳]
   const fired = new Map() // 'id@minute' -> minute（防重，只留最近 5 分钟）
   const cronCache = new Map() // 'id@表达式' -> parseCron 结果
+  const autoAdoptInterval = autoAdoptMs > 0 ? autoAdoptMs : AUTOADOPT_POLL_MS // 测试可注入更短间隔
   let timer = null
+  let autoTimer = null
   let lastMinute = null
   let started = false
 
@@ -871,6 +1086,7 @@ export function createScriptScheduler({ store, runner, dataDir, log = function (
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
       if (!it.cron) continue
+      if (it.enabled === false) continue // 停用 = 停自动，定时跳过
       const parsed = parsedCron(it)
       if (!parsed) continue
       if (!cronMatchesMinute(parsed, ms)) continue
@@ -910,6 +1126,7 @@ export function createScriptScheduler({ store, runner, dataDir, log = function (
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
       if (!it.cron || !it.cronCatchUp) continue
+      if (it.enabled === false) continue // 停用 = 停自动，补跑跳过
       const parsed = parsedCron(it)
       if (!parsed) continue
       let lastMissed = null
@@ -920,6 +1137,21 @@ export function createScriptScheduler({ store, runner, dataDir, log = function (
       if (lastMissed !== null) {
         launch(it, 'cron', '开机补跑', CRON_TIMEOUT_MS)
       }
+    }
+  }
+
+  /** 自动收纳（阶段四）：轮询目录，新出现的脚本自动收编。开关在 store.opts.autoAdopt（默认关） */
+  function autoAdoptTick() {
+    if (!started) return
+    const cfg = store.read()
+    if (!cfg.opts || !cfg.opts.autoAdopt) return
+    const res = store.scanCandidates()
+    if (!res.ok) return
+    if (!res.candidates.length) return
+    const adopted = store.adopt(res.candidates.map(function (c) { return c.rel }))
+    if (adopted.ok && adopted.added.length) {
+      log('自动收纳收编 ' + adopted.added.length + ' 个新脚本')
+      onAdopt(adopted.added)
     }
   }
 
@@ -941,9 +1173,9 @@ export function createScriptScheduler({ store, runner, dataDir, log = function (
     log('长驻脚本「' + item.name + '」意外退出（code=' + info.code + '），' + RELAUNCH_DELAY_MS + 'ms 后自动拉起')
     setTimeout(function () {
       if (!started) return // 宿主正在退出（stop() 已清定时器），别在退出路上再拉起
-      // 拉起前重读花名册：期间可能已被改名/删除/关掉长驻
+      // 拉起前重读花名册：期间可能已被改名/删除/关掉长驻/停用
       const it = store.read().items.find(function (x) { return x.id === item.id })
-      if (!it || !it.daemon) return
+      if (!it || !it.daemon || it.enabled === false) return
       launch(it, 'daemon', '长驻', 0)
     }, RELAUNCH_DELAY_MS)
   }
@@ -957,6 +1189,9 @@ export function createScriptScheduler({ store, runner, dataDir, log = function (
     lastMinute = typeof stateLastMinute === 'number' ? stateLastMinute : minOf(Date.now())
     timer = setInterval(tick, 1000)
     if (timer.unref) timer.unref()
+    // 自动收纳轮询：开关关着时 tick 里会自己跳过，不影响别的事
+    autoTimer = setInterval(autoAdoptTick, autoAdoptInterval)
+    if (autoTimer.unref) autoTimer.unref()
     // 随启动 + 长驻 + 开机补跑，等 Python 检测（ready）落定再开跑，最多等 3 秒
     Promise.race([
       Promise.resolve().then(ready).catch(function () {}),
@@ -966,6 +1201,7 @@ export function createScriptScheduler({ store, runner, dataDir, log = function (
       const items = store.read().items
       for (let i = 0; i < items.length; i++) {
         const it = items[i]
+        if (it.enabled === false) continue // 停用 = 停自动，随启动/长驻全跳过
         // 长驻优先（它必然带 onStartup）；普通随启动脚本跑一次就完事
         if (it.daemon) launch(it, 'daemon', '长驻', 0)
         else if (it.onStartup) launch(it, 'startup', '随启动', 0)
@@ -978,6 +1214,10 @@ export function createScriptScheduler({ store, runner, dataDir, log = function (
     if (timer) {
       clearInterval(timer)
       timer = null
+    }
+    if (autoTimer) {
+      clearInterval(autoTimer)
+      autoTimer = null
     }
     started = false
     writeState()

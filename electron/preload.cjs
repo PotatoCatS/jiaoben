@@ -32,6 +32,20 @@ contextBridge.exposeInMainWorld('jiaoben', {
   importFiles: () => ipcRenderer.invoke('jb:script-import'),
   openEditor: (id) => ipcRenderer.invoke('jb:script-open-editor', id),
   clipboardRead: () => ipcRenderer.invoke('jb:clipboard-read'),
+  /** 收纳管理（阶段四）：候选扫描 / 收编 / 不收编名单 / 开关 / 分组 / 停用 */
+  scanCandidates: () => ipcRenderer.invoke('jb:script-scan-candidates'),
+  adopt: (files) => ipcRenderer.invoke('jb:script-adopt', files),
+  ignore: (files) => ipcRenderer.invoke('jb:script-ignore', files),
+  unexclude: (file) => ipcRenderer.invoke('jb:script-unexclude', file),
+  excludedList: () => ipcRenderer.invoke('jb:script-excluded-list'),
+  optsGet: () => ipcRenderer.invoke('jb:script-opts-get'),
+  optsSet: (patch) => ipcRenderer.invoke('jb:script-opts-set', patch),
+  groupList: () => ipcRenderer.invoke('jb:script-group-list'),
+  groupCreate: (name) => ipcRenderer.invoke('jb:script-group-create', name),
+  groupRename: (id, name) => ipcRenderer.invoke('jb:script-group-rename', id, name),
+  groupRemove: (id) => ipcRenderer.invoke('jb:script-group-remove', id),
+  groupMove: (scriptId, groupId) => ipcRenderer.invoke('jb:script-group-move', scriptId, groupId),
+  setEnabled: (id, on) => ipcRenderer.invoke('jb:script-enabled', id, !!on),
   /** 示例库（可增删改查） */
   exList: () => ipcRenderer.invoke('jb:ex-list'),
   exRead: (id) => ipcRenderer.invoke('jb:ex-read', id),
@@ -44,6 +58,13 @@ contextBridge.exposeInMainWorld('jiaoben', {
     ipcRenderer.on('jb:script-log', (_e, batch) => {
       try {
         cb(batch)
+      } catch (err) {}
+    }),
+  /** 自动收纳收编了新脚本（主进程 → 渲染进程，面板开着时刷新列表） */
+  onAdopted: (cb) =>
+    ipcRenderer.on('jb:script-adopted', (_e, payload) => {
+      try {
+        cb(payload)
       } catch (err) {}
     }),
 })
