@@ -819,14 +819,14 @@ async function openScPaste() {
   input.spellcheck = false
   var sel = document.createElement('select')
   sel.className = 'dshpet-smp-select'
-  var optJs = document.createElement('option')
-  optJs.value = 'js'
-  optJs.textContent = 'JavaScript'
   var optPy = document.createElement('option')
   optPy.value = 'py'
   optPy.textContent = 'Python'
-  sel.appendChild(optJs)
+  var optJs = document.createElement('option')
+  optJs.value = 'js'
+  optJs.textContent = 'JavaScript'
   sel.appendChild(optPy)
+  sel.appendChild(optJs)
   row1.appendChild(input)
   row1.appendChild(sel)
   box.appendChild(row1)
@@ -1110,7 +1110,7 @@ function openScExEdit(item) {
   optPy.textContent = 'Python'
   sel.appendChild(optJs)
   sel.appendChild(optPy)
-  sel.value = item && item.lang === 'py' ? 'py' : 'js'
+  sel.value = item ? (item.lang === 'py' ? 'py' : 'js') : 'py'
   row1.appendChild(input)
   row1.appendChild(sel)
   box.appendChild(row1)
@@ -1634,14 +1634,14 @@ function mountJiaobenPanel(root, opts) {
   tb.appendChild(scNameIn)
   scLangSel = document.createElement('select')
   scLangSel.className = 'dshpet-smp-select'
-  var optJs = document.createElement('option')
-  optJs.value = 'js'
-  optJs.textContent = 'JavaScript'
   var optPy = document.createElement('option')
   optPy.value = 'py'
   optPy.textContent = 'Python'
-  scLangSel.appendChild(optJs)
+  var optJs = document.createElement('option')
+  optJs.value = 'js'
+  optJs.textContent = 'JavaScript'
   scLangSel.appendChild(optPy)
+  scLangSel.appendChild(optJs)
   tb.appendChild(scLangSel)
   var newBtn = document.createElement('button')
   newBtn.type = 'button'
