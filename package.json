@@ -1,6 +1,6 @@
 {
   "name": "jiaoben",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "脚本管理器：导入、编写、运行 JS / Python 小工具脚本，支持手动、定时 cron、随应用启动、长驻自动拉起。引擎库零依赖；electron/ 目录提供 Electron 宿主适配层与面板 UI。",
   "type": "module",
   "main": "src/index.mjs",

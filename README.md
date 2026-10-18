@@ -1,6 +1,6 @@
 # jiaoben
 
-一个**零依赖、纯 Node** 的「脚本管理器」核心引擎：花名册存储、JS/Python 脚本运行、cron 定时、开机补跑、长驻守护、日志管道。从桌宠工程（pet-sq）的脚本管理器功能中抽出，可作为：
+一个**零依赖、纯 Node** 的「脚本管理器」核心引擎：花名册存储、JS/Python 脚本运行、cron 定时、开机补跑、长驻守护、日志管道，以及**收纳管理**（候选扫描 / 收编 / 不收编名单 / 子目录与自动收纳开关 / 分组 / 停用）。从桌宠工程（pet-sq）的脚本管理器功能中抽出，可作为：
 
 - **路线 B（本包本体）**：任意 Node ≥ 22 应用直接 `import` 的引擎库；
 - **路线 A（electron/ 适配层）**：Electron 应用的即插即用功能插件（IPC 注册 + preload 桥 + 普通窗口款面板 UI）。
@@ -54,17 +54,25 @@ scheduler.start()   // 随启动 / 定时 / 长驻 / 开机补跑 全部开始�
 
 | 方法 | 行为 |
 |---|---|
-| `read()` | 读花名册 → `{ dir, items, excluded, pythonPath }`（文件坏掉时返回空花名册，不抛） |
+| `read()` | 读花名册 → `{ dir, items, excluded, pythonPath, groups, opts }`（文件坏掉时返回空花名册，不抛；老版本文件自动补齐新字段默认值） |
 | `setDir(dir)` | 换脚本目录；`excluded`（不收编名单）跟着作废 |
-| `save(input)` | 新建/更新条目。名字空、撞文件名、超 100 个会被拒；同 id 更新保留 createdAt |
+| `save(input)` | 新建/更新条目。名字空、撞文件名、超 100 个会被拒；同 id 更新保留 createdAt；**没传的可选字段（如 enabled/group）沿用旧值**，不会被默认值冲掉 |
 | `remove(id, deleteFile)` | 删条目；`deleteFile=true` 连文件删，`false` 只移出花名册（文件名进 excluded，防 rescan 捡回） |
-| `rescan()` | 目录对账：只收编**一级**的 `.js/.py` 新文件（大小写不敏感去重）；旧条目「找不到文件」不自动删 |
+| `rescan()` | 目录对账（内部调 `scanCandidates()`）：收编一级（或开子目录收纳后递归）的 .js/.py 新文件（大小写不敏感去重）；旧条目「找不到文件」不自动删 |
+| `scanCandidates()` | 对账目录：返回「花名册没有 + 名单里没有」的候选清单 `{ ok, deep, candidates:[{ path, file, lang, rel }] }`。子目录收纳开关打开时递归、否则只看一级 |
+| `adopt(files)` | 把候选文件登记进花名册，返回 `{ ok, added:[...], failed:[{file, error}] }`（单个失败不影响其他）；支持带相对路径的子目录文件（`file` 字段存相对路径）；已登记 / 名单里的文件重复收编会被跳过或放行 |
+| `ignore(files)` | 把文件名加进 `excluded[]`（不收编名单） |
+| `unexclude(file)` | 从名单移除（「恢复收纳」） |
+| `listExcluded()` | 返回名单数组 |
+| `setDeepAdopt(on)` / `setAutoAdopt(on)` | 两个开关落盘（`opts: { deepAdopt, autoAdopt }`，默认都关） |
+| `groupCreate(name)` / `groupRename(id, name)` / `groupRemove(id)` / `groupMove(scriptId, groupId)` | 分组增删改移（名字 60 字符内、大小写不敏感去重；删分组时组内脚本 group 归 null；groupId 为 null = 未分组） |
+| `setEnabled(id, on)` | 停用/启用（默认 true）；停用**只拦自动运行**（定时/补跑/随启动/长驻），手动 `runOne` 不拦；停用瞬间先停掉该脚本的长驻实例 |
 | `clone(id)` | 复制文件生成「xxx 副本.js」（撞名自动加 2、3…）并登记 |
 | `rename(id, newBase)` | 磁盘真改名 + 花名册同步（扩展名可带可不带；非法字符/撞名被拒） |
 | `importFile(src)` | 把任意路径的 .js/.py 复制进脚本目录一级并登记，撞名加序号不覆盖 |
 | `setPythonPath(p)` / `clearPythonPath()` | 自填 Python 解释器路径的落盘（**验证不在这里**，宿主先 probePython 过了再存） |
 
-条目字段：`id, name, file, lang('js'|'py'), cron, cronCatchUp, onStartup, daemon, closeAfterRun, createdAt, updatedAt`。
+条目字段：`id, name, file, lang('js'|'py'), cron, cronCatchUp, onStartup, daemon, closeAfterRun, group, enabled, createdAt, updatedAt`。
 
 ### createScriptRunner({ store, sendLog, getPython, log }) → 运行器
 
@@ -91,6 +99,8 @@ scheduler.start()   // 随启动 / 定时 / 长驻 / 开机补跑 全部开始�
 - **开机补跑**：重启时按心跳算错过多少分钟。gap ≤ 1 不补（同分钟重启）；> 7 天放弃；中间这段对勾了 `cronCatchUp` 的脚本，补跑错过的**最后一次**触发点（日志标「开机补跑」）。
 - **随启动**：等 `ready()` 落定（最多 3 秒）后，`daemon` 脚本以长驻启动，普通 `onStartup` 脚本跑一次。
 - **长驻守护**：daemon 实例意外退出（非用户停止）→ 1 秒后自动拉起；**30 秒窗口内崩 3 次** → 停止自动拉起并标红。
+- **停用跳过**：`enabled === false` 的脚本，定时 / 开机补跑 / 随启动 / 长驻拉起四个自动环节全部跳过（手动 `runOne` 不拦）。
+- **自动收纳轮询**：构造参数可给 `autoAdoptMs`（默认 0 = 关）与 `onAdopt(added)` 回调。开关（`store.setAutoAdopt(true)`）打开后每 30 秒扫一次候选，有新文件自动 `adopt()` 并回调通知（如「自动收纳 N 个新脚本」）。选轮询不选文件监听：Windows 上 `fs.watch` 对拖入文件、编辑器保存的事件不可靠，30 秒一次 readdir 零坑。
 - `start()` / `stop()`；`getAlarm(id)` 返回标红文案或 null；`clearAlarm(id)` 清报警。
 
 ### cron（自写解析器，不引依赖）
@@ -133,7 +143,9 @@ langOf('a.py')                      // 'py'；其它一律 'js'
 3. **定时运行 10 分钟封顶**，到点强杀，防脚本死循环拖累宿主。
 4. **脚本文件不存在时**：手动运行报错、定时/补跑在日志里插一行「⚠ 文件不存在」说明，不崩调度器。
 5. **换目录 = 换地盘**：excluded 名单、调度心跳都不跨目录迁移；心跳在 `dataDir` 下所以换目录不影响补跑判定。
-6. **引擎对宿主零硬耦合**：只有 `dataDir / log / sendLog / getPython` 四个注入点，其余全是 Node 内置模块。
+6. **停用只拦自动**：`enabled=false` 只暂停定时/补跑/随启动/长驻，手动运行不拦；停用瞬间先停掉该脚本的长驻实例（不留半死进程）。
+7. **待收纳清单不落盘**：候选 =「目录 vs 花名册 vs 名单」三者对账的临时视图，每次现算，天然不会脏。
+8. **引擎对宿主零硬耦合**：只有 `dataDir / log / sendLog / getPython` 四个注入点，其余全是 Node 内置模块。
 
 ## 开发与测试
 
@@ -155,4 +167,5 @@ node --check src/scripts.mjs src/examples.mjs src/index.mjs
 
 ## 版本历史
 
+- **0.1.1**：收纳管理——候选扫描 `scanCandidates` / 收编 `adopt` / 不收编名单 `ignore`/`unexclude`/`listExcluded` / 子目录与自动收纳开关 / 分组增删改移 / 停用（只停自动）；调度器停用跳过 + 30 秒自动收纳轮询；面板收纳管理 UI（清单/名单/开关/分组视图/搜索排序/批量/停用）；14 条收纳测试，`npm test` 74/74。
 - **0.1.0**：引擎层从桌宠工程抽出（花名册存储、运行器、调度器、cron 解析、示例库），带 60 条测试。
