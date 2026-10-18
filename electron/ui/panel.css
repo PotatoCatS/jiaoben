@@ -1,0 +1,369 @@
+/* ============================================================================
+ * jiaoben · 脚本管理器面板样式（从桌宠工程 pet-sq client/app.html 提取）
+ * ============================================================================
+ * 只带面板实际用到的规则：全部 dshpet-smp* 选择器 + CSS 变量 + body 基础样式。
+ * 普通窗口里的适配：
+ *   · #dshpet-smpanel 不再绝对定位：position:relative、宽高 100% 填满宿主容器
+ *   · 弹窗/右键菜单保留 position:fixed + 窗口居中（panel.mjs 里按 innerWidth 计算）
+ *   · 普通窗口没有穿透/命中区概念，已删掉相关注释与逻辑依赖
+ *   · 桌面宠物里的标题栏拖拽已删除，标题栏只保留标题 + ✕
+ * ============================================================================
+ */
+
+/* ===== 主题变量（与原桌宠一致；宿主页面不提供，这里兜底定义）===== */
+:root {
+  --pet-acc: #5B7889;
+  --pet-acc2: #6E8FA3;
+  --pet-txt: #3D4D55;
+  --pet-hint: #8BA1AA;
+  --pet-gold: #E3C171;
+  --pet-green: #6FA28C;
+  --pet-cream: #FFFDF4;
+  --pet-acc-rgb: 91, 120, 137;
+  color-scheme: light;
+}
+
+/* ===== 宿主页面基础（普通窗口，宿主 HTML 不提供这些）===== */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #eef1f4;
+  color: var(--pet-txt);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 13px;
+}
+
+/* ===== 脚本管理器：管理面板 ===== */
+#dshpet-smpanel {
+  /* 普通窗口：不再绝对定位，直接填满宿主容器 */
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 253, 244, 0.98);
+  padding: 12px;
+  color: var(--pet-txt);
+  color-scheme: light;
+  font-size: 13px;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+.dshpet-smp-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+.dshpet-smp-close {
+  margin-left: auto; border: none; background: transparent; color: inherit;
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.dshpet-smp-close:hover { background: rgba(var(--pet-acc-rgb), 0.12); }
+.dshpet-smp-toolbar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding-bottom: 10px; border-bottom: 1px solid rgba(var(--pet-acc-rgb), 0.16);
+}
+.dshpet-smp-btn {
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 7px;
+  background: var(--pet-cream); color: inherit; font-size: 12px; padding: 4px 10px;
+  cursor: pointer; font-family: inherit; white-space: nowrap;
+}
+.dshpet-smp-btn:hover { background: rgba(var(--pet-acc-rgb), 0.1); }
+.dshpet-smp-btn-primary { border-color: var(--pet-acc); background: var(--pet-acc); color: #fff; }
+.dshpet-smp-btn-primary:hover { background: var(--pet-acc2); }
+.dshpet-smp-input {
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 7px;
+  padding: 4px 8px; font-size: 12px; font-family: inherit; background: var(--pet-cream); color: inherit;
+}
+.dshpet-smp-select {
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 7px;
+  padding: 4px 6px; font-size: 12px; font-family: inherit; background: var(--pet-cream); color: inherit;
+}
+.dshpet-smp-input:focus, .dshpet-smp-select:focus { outline: 2px solid rgba(var(--pet-acc-rgb), 0.35); outline-offset: -1px; }
+.dshpet-smp-hint { font-size: 11px; opacity: 0.7; }
+.dshpet-smp-main { flex: 1 1 auto; min-height: 0; display: flex; gap: 10px; margin-top: 10px; }
+.dshpet-smp-list {
+  flex: 0 0 258px; min-width: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px; padding-right: 2px;
+}
+.dshpet-smp-empty { opacity: 0.55; font-size: 12px; padding: 20px 4px; text-align: center; white-space: pre-line; }
+.dshpet-smp-item {
+  flex: 0 0 auto; border: 1px solid rgba(var(--pet-acc-rgb), 0.18); border-radius: 9px;
+  padding: 7px 8px; background: rgba(var(--pet-acc-rgb), 0.04); cursor: pointer;
+}
+.dshpet-smp-item:hover { background: rgba(var(--pet-acc-rgb), 0.08); }
+.dshpet-smp-item-sel { border-color: var(--pet-acc); box-shadow: 0 0 0 1px var(--pet-acc) inset; }
+.dshpet-smp-item-missing { opacity: 0.55; border-style: dashed; }
+.dshpet-smp-item-name { font-size: 12.5px; word-break: break-all; display: flex; align-items: center; gap: 5px; }
+.dshpet-smp-lang {
+  flex: 0 0 auto; font-size: 10px; font-weight: 600; border-radius: 4px;
+  padding: 0 4px; color: #fff; background: var(--pet-acc);
+}
+.dshpet-smp-lang-py { background: var(--pet-green); }
+.dshpet-smp-item-sub { font-size: 11px; opacity: 0.6; margin-top: 2px; }
+.dshpet-smp-item-ops { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.dshpet-smp-op {
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.3); border-radius: 6px; background: var(--pet-cream);
+  color: inherit; font-size: 11px; padding: 2px 7px; cursor: pointer; font-family: inherit;
+}
+.dshpet-smp-op:hover { background: rgba(var(--pet-acc-rgb), 0.1); }
+.dshpet-smp-op-danger:hover { background: rgba(180, 35, 24, 0.12); border-color: rgba(180, 35, 24, 0.5); color: #b42318; }
+.dshpet-smp-right { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.dshpet-smp-tabs { flex: 0 0 auto; display: flex; gap: 6px; margin-bottom: 8px; }
+.dshpet-smp-tab {
+  border: 1px solid transparent; border-radius: 7px 7px 0 0; background: transparent;
+  color: inherit; font-size: 12px; padding: 4px 12px; cursor: pointer; font-family: inherit;
+}
+.dshpet-smp-tab-sel { border-color: rgba(var(--pet-acc-rgb), 0.35); border-bottom-color: transparent; background: rgba(var(--pet-acc-rgb), 0.06); }
+.dshpet-smp-editor-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.dshpet-smp-editor {
+  flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 9px; padding: 8px;
+  font-family: Consolas, "Courier New", monospace; font-size: 12.5px; line-height: 1.5;
+  background: var(--pet-cream); color: inherit; resize: none;
+}
+.dshpet-smp-editor:focus { outline: 2px solid rgba(var(--pet-acc-rgb), 0.35); outline-offset: -1px; }
+.dshpet-smp-log {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 9px; padding: 8px;
+  font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.5;
+  background: rgba(var(--pet-acc-rgb), 0.03); white-space: pre-wrap; word-break: break-all;
+}
+.dshpet-smp-log-sys { opacity: 0.55; }
+.dshpet-smp-log-err { color: #b42318; }
+.dshpet-smp-log-exit { opacity: 0.75; }
+.dshpet-smp-status {
+  flex: 0 0 auto; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid rgba(var(--pet-acc-rgb), 0.16);
+  font-size: 11px; opacity: 0.75; display: flex; gap: 10px; flex-wrap: wrap;
+  word-break: break-all;
+}
+/* 脚本列表右键菜单（挂在宿主 root 下，贴光标） */
+#dshpet-smpmenu {
+  position: fixed;
+  z-index: 2147483400;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px;
+  background: rgba(255, 253, 244, 0.99);
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.38);
+  border-radius: 9px;
+  box-shadow: 0 8px 22px rgba(13, 14, 15, 0.32);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--pet-txt);
+  pointer-events: auto;
+}
+.dshpet-smp-menu-item {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dshpet-smp-menu-item:hover { background: rgba(var(--pet-acc-rgb), 0.12); }
+.dshpet-smp-menu-danger { color: #b42318; }
+.dshpet-smp-menu-danger:hover { background: rgba(180, 35, 24, 0.12); }
+/* 重命名弹窗（window.prompt 在 Electron 里不可用，自绘输入框） */
+#dshpet-smprename {
+  position: fixed;
+  z-index: 2147483500;
+  width: 320px;
+  box-sizing: border-box;
+  padding: 12px;
+  background: rgba(255, 253, 244, 0.99);
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.38);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(13, 14, 15, 0.32);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--pet-txt);
+  color-scheme: light;
+  pointer-events: auto;
+}
+.dshpet-smp-rename-label { font-size: 12px; opacity: 0.8; margin-bottom: 8px; word-break: break-word; }
+.dshpet-smp-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--pet-cream);
+  color: inherit;
+}
+.dshpet-smp-rename-input:focus { outline: 2px solid rgba(var(--pet-acc-rgb), 0.35); outline-offset: -1px; }
+.dshpet-smp-rename-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+/* 阶段三：启动方式弹窗 + Python 弹窗（共用底座） */
+#dshpet-smpsched,
+#dshpet-smpydlg {
+  position: fixed;
+  z-index: 2147483500;
+  width: 470px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 12px;
+  background: rgba(255, 253, 244, 0.99);
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.38);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(13, 14, 15, 0.32);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--pet-txt);
+  color-scheme: light;
+  pointer-events: auto;
+}
+.dshpet-smp-sched-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.dshpet-smp-sched-label { font-size: 12px; opacity: 0.8; margin-bottom: 4px; }
+.dshpet-smp-sched-cronrow { display: flex; gap: 8px; margin-bottom: 4px; }
+.dshpet-smp-sched-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  box-sizing: border-box;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: Consolas, "Courier New", monospace;
+  background: var(--pet-cream);
+  color: inherit;
+}
+.dshpet-smp-sched-input:focus { outline: 2px solid rgba(var(--pet-acc-rgb), 0.35); outline-offset: -1px; }
+.dshpet-smp-sched-prev { font-size: 12px; min-height: 16px; margin: 2px 0 8px; opacity: 0.75; }
+.dshpet-smp-sched-prev-ok { color: var(--pet-green); opacity: 1; }
+.dshpet-smp-sched-prev-err { color: #b42318; opacity: 1; }
+.dshpet-smp-sched-line { display: flex; align-items: center; gap: 12px; margin: 4px 0 8px; }
+.dshpet-smp-sched-line .dshpet-smp-sched-label { margin-bottom: 0; }
+.dshpet-smp-sched-radio { font-size: 12.5px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.dshpet-smp-sched-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; margin: 4px 0; cursor: pointer; }
+.dshpet-smp-sched-hint { font-size: 11px; opacity: 0.6; margin: -2px 0 6px 22px; }
+.dshpet-smp-sched-err { color: #b42318; font-size: 12px; min-height: 15px; margin-top: 6px; }
+.dshpet-smp-ydlg-status { font-size: 12.5px; margin-bottom: 10px; opacity: 0.85; word-break: break-all; }
+.dshpet-smp-ydlg-ok { color: var(--pet-green); }
+.dshpet-smp-ydlg-bad { color: #b42318; }
+.dshpet-smp-ydlg-msg { font-size: 12px; min-height: 15px; margin-top: 6px; opacity: 0.8; }
+.dshpet-smp-ydlg-msg.dshpet-smp-ydlg-bad { color: #b42318; opacity: 1; }
+/* 阶段三：行内标记（⏱🚀🔁）与长驻连崩标红 */
+.dshpet-smp-mk { flex: 0 0 auto; font-size: 11px; line-height: 1; opacity: 0.85; cursor: help; }
+.dshpet-smp-item-alarm { border-color: rgba(180, 35, 24, 0.55); background: rgba(180, 35, 24, 0.07); }
+.dshpet-smp-op-sched { font-weight: 600; }
+.dshpet-smp-op-on {
+  border-color: var(--pet-acc);
+  color: var(--pet-acc);
+  background: rgba(var(--pet-acc-rgb), 0.12);
+}
+/* 工具栏第二行（文件操作）：紧贴第一行，靠第一行的下边线分隔 */
+.dshpet-smp-toolbar2 { padding-top: 8px; }
+/* 粘贴代码弹窗（自动预填剪贴板；window.prompt 在 Electron 里不可用，自绘） */
+#dshpet-smpaste {
+  position: fixed;
+  z-index: 2147483500;
+  width: 560px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 12px;
+  background: rgba(255, 253, 244, 0.99);
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.38);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(13, 14, 15, 0.32);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--pet-txt);
+  color-scheme: light;
+  pointer-events: auto;
+}
+.dshpet-smp-paste-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.dshpet-smp-paste-name { flex: 1 1 auto; min-width: 0; width: auto; }
+.dshpet-smp-paste-code {
+  width: 100%; box-sizing: border-box; height: 200px; resize: none; display: block;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 7px; padding: 8px;
+  font-family: Consolas, "Courier New", monospace; font-size: 12.5px; line-height: 1.5;
+  background: var(--pet-cream); color: inherit;
+}
+.dshpet-smp-paste-code:focus { outline: 2px solid rgba(var(--pet-acc-rgb), 0.35); outline-offset: -1px; }
+/* 示例库管理器（可增删改查） */
+#dshpet-smpexamples {
+  position: fixed;
+  z-index: 2147483500;
+  width: 680px;
+  height: 440px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  box-sizing: border-box;
+  padding: 10px 12px 12px;
+  background: rgba(255, 253, 244, 0.99);
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.38);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(13, 14, 15, 0.32);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--pet-txt);
+  color-scheme: light;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dshpet-smp-ex-head { flex: 0 0 auto; font-size: 12.5px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.dshpet-smp-ex-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 8px; }
+.dshpet-smp-ex-list {
+  flex: 0 0 240px; min-width: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 5px; padding-right: 2px;
+}
+.dshpet-smp-ex-item {
+  flex: 0 0 auto;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.22);
+  border-radius: 8px;
+  background: rgba(var(--pet-acc-rgb), 0.04);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+}
+.dshpet-smp-ex-item:hover { background: rgba(var(--pet-acc-rgb), 0.1); border-color: rgba(var(--pet-acc-rgb), 0.4); }
+.dshpet-smp-ex-item-sel { border-color: var(--pet-acc); box-shadow: 0 0 0 1px var(--pet-acc) inset; }
+.dshpet-smp-ex-item-missing { opacity: 0.55; border-style: dashed; }
+.dshpet-smp-ex-name { font-size: 12.5px; display: flex; align-items: center; gap: 5px; word-break: break-all; }
+.dshpet-smp-ex-sub { font-size: 11px; opacity: 0.6; word-break: break-all; }
+.dshpet-smp-ex-viewer {
+  flex: 1 1 auto; min-width: 0; box-sizing: border-box;
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.35); border-radius: 8px; padding: 8px;
+  font-family: Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.5;
+  background: rgba(var(--pet-acc-rgb), 0.03); color: inherit; resize: none; overflow: auto;
+}
+.dshpet-smp-ex-viewer:focus { outline: 2px solid rgba(var(--pet-acc-rgb), 0.35); outline-offset: -1px; }
+.dshpet-smp-ex-btns { flex: 0 0 auto; display: flex; gap: 7px; align-items: center; }
+/* 示例编辑弹窗（新建/编辑共用） */
+#dshpet-smpexedit {
+  position: fixed;
+  z-index: 2147483600;
+  width: 560px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 12px;
+  background: rgba(255, 253, 244, 0.99);
+  border: 1px solid rgba(var(--pet-acc-rgb), 0.38);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(13, 14, 15, 0.32);
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: var(--pet-txt);
+  color-scheme: light;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

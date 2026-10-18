@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>jiaoben 脚本管理器（演示）</title>
+  <link rel="stylesheet" href="../electron/ui/panel.css" />
+  <style>
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      background: #f4f5f7;
+      color: #1f2430;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      background: #fff;
+      border-bottom: 1px solid #e2e5ea;
+    }
+    header .logo { font-weight: 700; font-size: 14px; }
+    header button {
+      border: 1px solid #c9ced8;
+      background: #fff;
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    header button:hover { background: #f0f3f8; }
+    #root { flex: 1 1 auto; min-height: 0; padding: 12px; display: flex; flex-direction: column; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="logo">jiaoben 演示应用</span>
+    <button id="open-panel">打开脚本管理器</button>
+    <span style="font-size:11px;opacity:.55">这是一个最小宿主：把 jiaoben 面板嵌进任何 Electron 窗口的示例</span>
+  </header>
+  <main id="root"></main>
+  <script type="module">
+    import { mountJiaobenPanel } from '../electron/ui/panel.mjs'
+    const root = document.getElementById('root')
+    document.getElementById('open-panel').onclick = () => {
+      mountJiaobenPanel(root, { onClose: () => window.close() })
+    }
+    // 演示方便：启动即挂载
+    mountJiaobenPanel(root)
+  </script>
+</body>
+</html>
